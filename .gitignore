@@ -1,0 +1,29 @@
+# 最愛地點資料（個人資料不上傳）
+gps_favorites.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 虛擬環境
+venv/
+env/
+.venv/
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系統檔案
+.DS_Store
+Thumbs.db
+desktop.ini

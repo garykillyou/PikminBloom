@@ -1,0 +1,661 @@
+# iPhone GPS 路線模擬器 - 圖形介面版
+# 執行前請確認：
+#   1. 系統管理員視窗執行：pymobiledevice3 remote tunneld
+#   2. 執行此 App：C:\Python311\python.exe gps_app.py
+
+import asyncio
+import math
+import threading
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext, simpledialog
+import sys
+import json
+import os
+
+FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gps_favorites.json")
+
+def load_favorites():
+    if os.path.exists(FAVORITES_FILE):
+        try:
+            with open(FAVORITES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_favorites(favs):
+    with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
+        json.dump(favs, f, ensure_ascii=False, indent=2)
+
+# ── 顏色主題 ──────────────────────────────────
+BG       = "#0f0f14"
+BG2      = "#1a1a24"
+BG3      = "#22223a"
+ACCENT   = "#00e5ff"
+ACCENT2  = "#7c4dff"
+SUCCESS  = "#00e676"
+DANGER   = "#ff1744"
+TEXT     = "#e8e8f0"
+TEXT2    = "#8888aa"
+# ─────────────────────────────────────────────
+
+DEFAULT_ROUTE = [
+    (24.1368, 120.6862, "台中火車站"),
+    (24.1390, 120.6800, "台灣大道一段"),
+    (24.1420, 120.6720, "台灣大道二段"),
+    (24.1470, 120.6640, "台灣大道三段"),
+    (24.1520, 120.6560, "台灣大道四段"),
+    (24.1560, 120.6480, "近市政府"),
+    (24.1590, 120.6430, "勤美誠品"),
+]
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+def interpolate_points(route, speed_ms, interval_sec):
+    points = []
+    for i in range(len(route) - 1):
+        lat1, lon1 = route[i][0], route[i][1]
+        lat2, lon2 = route[i+1][0], route[i+1][1]
+        dist = haversine(lat1, lon1, lat2, lon2)
+        steps = max(1, int(dist / (speed_ms * interval_sec)))
+        for s in range(steps):
+            t = s / steps
+            points.append((lat1 + (lat2-lat1)*t, lon1 + (lon2-lon1)*t))
+    points.append((route[-1][0], route[-1][1]))
+    return points
+
+class GPSApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("iPhone GPS 路線模擬器")
+        self.geometry("720x820")
+        self.configure(bg=BG)
+        self.resizable(False, False)
+
+        self.running = False
+        self.stop_event = threading.Event()
+        self.sim_thread = None
+        self.route = [list(r) for r in DEFAULT_ROUTE]
+        self.mode = tk.StringVar(value="route")
+        self.favorites = load_favorites()
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # ── 標題 ──
+        title_frame = tk.Frame(self, bg=BG, pady=20)
+        title_frame.pack(fill="x", padx=30)
+
+        tk.Label(title_frame, text="📍", font=("Segoe UI Emoji", 28),
+                 bg=BG, fg=ACCENT).pack(side="left")
+        title_col = tk.Frame(title_frame, bg=BG)
+        title_col.pack(side="left", padx=12)
+        tk.Label(title_col, text="GPS 路線模擬器",
+                 font=("Segoe UI", 20, "bold"), bg=BG, fg=TEXT).pack(anchor="w")
+        tk.Label(title_col, text="iPhone iOS 17/18+  ·  需先執行 tunneld",
+                 font=("Segoe UI", 10), bg=BG, fg=TEXT2).pack(anchor="w")
+
+        # ── 模式切換 ──
+        mode_frame = tk.Frame(self, bg=BG2, padx=20, pady=12)
+        mode_frame.pack(fill="x", padx=24, pady=(0, 8))
+
+        tk.Label(mode_frame, text="模式選擇", font=("Segoe UI", 11, "bold"),
+                 bg=BG2, fg=TEXT).pack(side="left", padx=(0, 16))
+
+        self.route_mode_btn = tk.Button(mode_frame, text="🗺  路線移動",
+                                        font=("Segoe UI", 10, "bold"),
+                                        bg=ACCENT, fg="#000", relief="flat",
+                                        padx=16, pady=6, cursor="hand2",
+                                        command=lambda: self._switch_mode("route"))
+        self.route_mode_btn.pack(side="left", padx=4)
+
+        self.pin_mode_btn = tk.Button(mode_frame, text="📌  固定定位",
+                                      font=("Segoe UI", 10, "bold"),
+                                      bg=BG3, fg=TEXT2, relief="flat",
+                                      padx=16, pady=6, cursor="hand2",
+                                      command=lambda: self._switch_mode("pin"))
+        self.pin_mode_btn.pack(side="left", padx=4)
+
+        # ── 固定定位面板（預設隱藏）──
+        self.pin_frame = tk.Frame(self, bg=BG2, padx=20, pady=16)
+
+        tk.Label(self.pin_frame, text="固定座標",
+                 font=("Segoe UI", 11, "bold"), bg=BG2, fg=TEXT).grid(
+                 row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+
+        tk.Label(self.pin_frame, text="緯度：", font=("Segoe UI", 10),
+                 bg=BG2, fg=TEXT2).grid(row=1, column=0, sticky="w")
+        self.pin_lat = tk.StringVar(value="24.1368")
+        tk.Entry(self.pin_frame, textvariable=self.pin_lat, width=16,
+                 font=("Segoe UI", 11), bg=BG3, fg=ACCENT,
+                 insertbackground=ACCENT, relief="flat", bd=4).grid(
+                 row=1, column=1, padx=8)
+
+        tk.Label(self.pin_frame, text="經度：", font=("Segoe UI", 10),
+                 bg=BG2, fg=TEXT2).grid(row=1, column=2, sticky="w")
+        self.pin_lon = tk.StringVar(value="120.6862")
+        tk.Entry(self.pin_frame, textvariable=self.pin_lon, width=16,
+                 font=("Segoe UI", 11), bg=BG3, fg=ACCENT,
+                 insertbackground=ACCENT, relief="flat", bd=4).grid(
+                 row=1, column=3, padx=8)
+
+        # 預設地點快速選擇
+        pin_presets_label = tk.Frame(self.pin_frame, bg=BG2)
+        pin_presets_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(12, 4))
+        tk.Label(pin_presets_label, text="快速選擇：",
+                 font=("Segoe UI", 9), bg=BG2, fg=TEXT2).pack(side="left")
+
+        pin_presets_btns = tk.Frame(self.pin_frame, bg=BG2)
+        pin_presets_btns.grid(row=3, column=0, columnspan=4, sticky="w")
+        pin_presets = [
+            ("台中火車站", 24.1368, 120.6862),
+            ("台北101",   25.0338, 121.5645),
+            ("高雄85大樓", 22.6155, 120.3025),
+            ("台南孔廟",   22.9969, 120.2008),
+        ]
+        for name, lat, lon in pin_presets:
+            btn = tk.Button(pin_presets_btns, text=name,
+                            font=("Segoe UI", 9),
+                            bg=BG3, fg=TEXT2, relief="flat",
+                            padx=10, pady=5, cursor="hand2",
+                            command=lambda la=lat, lo=lon: (
+                                self.pin_lat.set(str(la)),
+                                self.pin_lon.set(str(lo))
+                            ))
+            btn.pack(side="left", padx=4)
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
+
+        # ── 最愛地點面板 ──
+        self.fav_frame = tk.Frame(self, bg=BG2, padx=20, pady=14)
+
+        fav_title_row = tk.Frame(self.fav_frame, bg=BG2)
+        fav_title_row.pack(fill="x", pady=(0, 10))
+        tk.Label(fav_title_row, text="⭐ 最愛地點",
+                 font=("Segoe UI", 11, "bold"), bg=BG2, fg=TEXT).pack(side="left")
+
+        # 儲存目前定位按鈕
+        save_pin_btn = tk.Button(fav_title_row, text="＋ 儲存目前座標",
+                                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT,
+                                  relief="flat", padx=10, pady=4, cursor="hand2",
+                                  command=self._save_current_pin_as_fav)
+        save_pin_btn.pack(side="right", padx=(4, 0))
+
+        save_route_btn = tk.Button(fav_title_row, text="＋ 儲存目前路線",
+                                    font=("Segoe UI", 9), bg=BG3, fg=TEXT2,
+                                    relief="flat", padx=10, pady=4, cursor="hand2",
+                                    command=self._save_current_route_as_fav)
+        save_route_btn.pack(side="right", padx=4)
+
+        # 最愛列表
+        self.fav_list_frame = tk.Frame(self.fav_frame, bg=BG2)
+        self.fav_list_frame.pack(fill="x")
+        self._refresh_fav_list()
+
+        # ── 速度設定 ──
+        speed_frame = tk.Frame(self, bg=BG2, padx=20, pady=16)
+        speed_frame.pack(fill="x", padx=24, pady=(0, 12))
+        self.speed_frame_ref = speed_frame
+
+        tk.Label(speed_frame, text="移動速度", font=("Segoe UI", 11, "bold"),
+                 bg=BG2, fg=TEXT).grid(row=0, column=0, sticky="w")
+
+        self.speed_var = tk.DoubleVar(value=5.56)
+        presets = [("步行 5 km/h", 1.39), ("慢跑 10 km/h", 2.78),
+                   ("騎車 20 km/h", 5.56), ("開車 40 km/h", 11.11)]
+
+        preset_frame = tk.Frame(speed_frame, bg=BG2)
+        preset_frame.grid(row=1, column=0, sticky="w", pady=8)
+        for label, val in presets:
+            btn = tk.Button(preset_frame, text=label,
+                            font=("Segoe UI", 9),
+                            bg=BG3, fg=TEXT2, relief="flat",
+                            padx=10, pady=5, cursor="hand2",
+                            command=lambda v=val: self._set_speed(v))
+            btn.pack(side="left", padx=4)
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT))
+            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
+
+        speed_row = tk.Frame(speed_frame, bg=BG2)
+        speed_row.grid(row=2, column=0, sticky="w")
+        tk.Label(speed_row, text="自訂 m/s：", font=("Segoe UI", 10),
+                 bg=BG2, fg=TEXT2).pack(side="left")
+        self.speed_entry = tk.Entry(speed_row, textvariable=self.speed_var,
+                                    width=8, font=("Segoe UI", 11),
+                                    bg=BG3, fg=ACCENT, insertbackground=ACCENT,
+                                    relief="flat", bd=4)
+        self.speed_entry.pack(side="left", padx=6)
+
+        self.loop_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(speed_row, text="循環模式",
+                       variable=self.loop_var,
+                       font=("Segoe UI", 10), bg=BG2, fg=TEXT2,
+                       selectcolor=BG3, activebackground=BG2,
+                       activeforeground=TEXT).pack(side="left", padx=16)
+
+        # ── 路線點 ──
+        self.route_section = tk.Frame(self, bg=BG)
+        self.route_section.pack(fill="x", padx=0)
+
+        route_label_frame = tk.Frame(self.route_section, bg=BG)
+        route_label_frame.pack(fill="x", padx=24, pady=(4, 4))
+        tk.Label(route_label_frame, text="路線座標點",
+                 font=("Segoe UI", 11, "bold"), bg=BG, fg=TEXT).pack(side="left")
+        tk.Button(route_label_frame, text="＋ 新增點",
+                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT,
+                  relief="flat", padx=10, pady=3, cursor="hand2",
+                  command=self._add_point).pack(side="right")
+
+        # 路線表格
+        cols_frame = tk.Frame(self.route_section, bg=BG3)
+        cols_frame.pack(fill="x", padx=24)
+        for txt, w in [("#", 4), ("緯度", 18), ("經度", 18), ("備註", 22), ("", 6)]:
+            tk.Label(cols_frame, text=txt, font=("Segoe UI", 9),
+                     bg=BG3, fg=TEXT2, width=w, anchor="w",
+                     padx=6, pady=4).pack(side="left")
+
+        self.route_container = tk.Frame(self.route_section, bg=BG2)
+        self.route_container.pack(fill="x", padx=24)
+        self._refresh_route_rows()
+
+        # 最愛面板（路線模式預設顯示）
+        self.fav_frame.pack(fill="x", padx=24, pady=(0, 8))
+
+        # 距離/時間資訊
+        self.info_label = tk.Label(self, text="",
+                                   font=("Segoe UI", 10), bg=BG, fg=TEXT2)
+        self.info_label.pack(pady=6)
+        self._update_info()
+
+        # ── 控制按鈕 ──
+        btn_frame = tk.Frame(self, bg=BG, pady=8)
+        btn_frame.pack()
+
+        self.start_btn = tk.Button(btn_frame, text="▶  開始模擬",
+                                   font=("Segoe UI", 13, "bold"),
+                                   bg=ACCENT, fg="#000", relief="flat",
+                                   padx=30, pady=12, cursor="hand2",
+                                   command=self._start)
+        self.start_btn.pack(side="left", padx=8)
+
+        self.stop_btn = tk.Button(btn_frame, text="⏹  停止",
+                                  font=("Segoe UI", 13, "bold"),
+                                  bg=DANGER, fg=TEXT, relief="flat",
+                                  padx=30, pady=12, cursor="hand2",
+                                  state="disabled",
+                                  command=self._stop)
+        self.stop_btn.pack(side="left", padx=8)
+
+        # ── 進度條 ──
+        self.progress_var = tk.DoubleVar(value=0)
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("GPS.Horizontal.TProgressbar",
+                        troughcolor=BG3, background=ACCENT,
+                        bordercolor=BG3, lightcolor=ACCENT,
+                        darkcolor=ACCENT, thickness=8)
+        self.progress_bar = ttk.Progressbar(self, variable=self.progress_var,
+                                             maximum=100, length=660,
+                                             style="GPS.Horizontal.TProgressbar")
+        self.progress_bar.pack(pady=8)
+
+        self.progress_label = tk.Label(self, text="",
+                                       font=("Segoe UI", 10), bg=BG, fg=TEXT2)
+        self.progress_label.pack()
+
+        # ── 日誌 ──
+        tk.Label(self, text="執行日誌", font=("Segoe UI", 10, "bold"),
+                 bg=BG, fg=TEXT2).pack(anchor="w", padx=26, pady=(12, 2))
+        self.log = scrolledtext.ScrolledText(self, height=8,
+                                              font=("Consolas", 9),
+                                              bg=BG2, fg=TEXT2,
+                                              insertbackground=ACCENT,
+                                              relief="flat", bd=0,
+                                              state="disabled")
+        self.log.pack(fill="x", padx=24, pady=(0, 20))
+
+    def _switch_mode(self, mode):
+        self.mode.set(mode)
+        if mode == "route":
+            self.route_mode_btn.config(bg=ACCENT, fg="#000")
+            self.pin_mode_btn.config(bg=BG3, fg=TEXT2)
+            self.pin_frame.pack_forget()
+            self.fav_frame.pack(fill="x", padx=24, pady=(0, 8))
+            self.speed_frame_ref.pack(fill="x", padx=24, pady=(0, 12))
+            self.route_section.pack(fill="x", padx=0)
+            self.info_label.pack(pady=6)
+            self.start_btn.config(text="▶  開始模擬")
+        else:
+            self.pin_mode_btn.config(bg=ACCENT2, fg=TEXT)
+            self.route_mode_btn.config(bg=BG3, fg=TEXT2)
+            self.speed_frame_ref.pack_forget()
+            self.route_section.pack_forget()
+            self.info_label.pack_forget()
+            self.pin_frame.pack(fill="x", padx=24, pady=(0, 8))
+            self.fav_frame.pack(fill="x", padx=24, pady=(0, 8))
+            self.start_btn.config(text="📌  固定定位")
+
+    def _refresh_fav_list(self):
+        for w in self.fav_list_frame.winfo_children():
+            w.destroy()
+        if not self.favorites:
+            tk.Label(self.fav_list_frame, text="尚無儲存的最愛地點",
+                     font=("Segoe UI", 9), bg=BG2, fg=TEXT2,
+                     pady=6).pack(anchor="w")
+            return
+        for i, fav in enumerate(self.favorites):
+            row = tk.Frame(self.fav_list_frame,
+                           bg=BG3 if i % 2 == 0 else BG2)
+            row.pack(fill="x", pady=1)
+
+            # 圖示
+            icon = "📌" if fav["type"] == "pin" else "🗺"
+            tk.Label(row, text=icon, font=("Segoe UI Emoji", 10),
+                     bg=row["bg"], fg=TEXT2, width=3).pack(side="left", padx=4)
+
+            # 名稱
+            tk.Label(row, text=fav["name"],
+                     font=("Segoe UI", 10, "bold"), bg=row["bg"], fg=TEXT,
+                     width=18, anchor="w").pack(side="left")
+
+            # 座標預覽
+            if fav["type"] == "pin":
+                preview = f"{fav['lat']:.4f}, {fav['lon']:.4f}"
+            else:
+                preview = f"{len(fav['route'])} 個節點"
+            tk.Label(row, text=preview, font=("Segoe UI", 9),
+                     bg=row["bg"], fg=TEXT2, width=20, anchor="w").pack(side="left")
+
+            # 載入按鈕
+            load_btn = tk.Button(row, text="載入",
+                                  font=("Segoe UI", 8), bg=ACCENT, fg="#000",
+                                  relief="flat", padx=8, pady=2, cursor="hand2",
+                                  command=lambda f=fav: self._load_fav(f))
+            load_btn.pack(side="left", padx=4)
+
+            # 刪除按鈕
+            del_btn = tk.Button(row, text="✕",
+                                 font=("Segoe UI", 8), bg=row["bg"], fg=DANGER,
+                                 relief="flat", padx=6, pady=2, cursor="hand2",
+                                 command=lambda i=i: self._del_fav(i))
+            del_btn.pack(side="left", padx=2)
+
+    def _save_current_pin_as_fav(self):
+        try:
+            lat = float(self.pin_lat.get())
+            lon = float(self.pin_lon.get())
+        except ValueError:
+            messagebox.showerror("錯誤", "請先輸入有效座標")
+            return
+        name = simpledialog.askstring("儲存最愛", "請輸入地點名稱：",
+                                       parent=self, initialvalue="我的地點")
+        if not name:
+            return
+        self.favorites.append({"type": "pin", "name": name, "lat": lat, "lon": lon})
+        save_favorites(self.favorites)
+        self._refresh_fav_list()
+        self._log("⭐ 已儲存最愛：" + name)
+
+    def _save_current_route_as_fav(self):
+        if len(self.route) < 2:
+            messagebox.showerror("錯誤", "請至少設定 2 個路線點")
+            return
+        name = simpledialog.askstring("儲存最愛", "請輸入路線名稱：",
+                                       parent=self, initialvalue="我的路線")
+        if not name:
+            return
+        self.favorites.append({
+            "type": "route",
+            "name": name,
+            "route": [[r[0], r[1], r[2]] for r in self.route]
+        })
+        save_favorites(self.favorites)
+        self._refresh_fav_list()
+        self._log("⭐ 已儲存路線：" + name)
+
+    def _load_fav(self, fav):
+        if fav["type"] == "pin":
+            self._switch_mode("pin")
+            self.pin_lat.set(str(fav["lat"]))
+            self.pin_lon.set(str(fav["lon"]))
+            self._log("⭐ 載入最愛：" + fav["name"])
+        else:
+            self._switch_mode("route")
+            self.route = [[r[0], r[1], r[2]] for r in fav["route"]]
+            self._refresh_route_rows()
+            self._update_info()
+            self._log("⭐ 載入路線：" + fav["name"])
+
+    def _del_fav(self, i):
+        name = self.favorites[i]["name"]
+        if messagebox.askyesno("確認刪除", f"確定要刪除「{name}」？"):
+            self.favorites.pop(i)
+            save_favorites(self.favorites)
+            self._refresh_fav_list()
+            self._log("🗑  已刪除：" + name)
+
+    def _set_speed(self, val):
+        self.speed_var.set(round(val, 2))
+
+    def _refresh_route_rows(self):
+        for w in self.route_container.winfo_children():
+            w.destroy()
+        for i, pt in enumerate(self.route):
+            row = tk.Frame(self.route_container,
+                           bg=BG2 if i % 2 == 0 else BG3)
+            row.pack(fill="x")
+            tk.Label(row, text=str(i+1), width=4, font=("Segoe UI", 9),
+                     bg=row["bg"], fg=TEXT2, padx=6, pady=4).pack(side="left")
+            for j, (w, key) in enumerate([(18, 0), (18, 1), (22, 2)]):
+                var = tk.StringVar(value=str(pt[j]))
+                e = tk.Entry(row, textvariable=var, width=w,
+                             font=("Segoe UI", 9), bg=row["bg"],
+                             fg=ACCENT if j < 2 else TEXT,
+                             insertbackground=ACCENT, relief="flat", bd=2)
+                e.pack(side="left", padx=2)
+                idx, field = i, j
+                var.trace_add("write", lambda *a, i=idx, f=field, v=var: self._on_edit(i, f, v))
+            tk.Button(row, text="✕", font=("Segoe UI", 8),
+                      bg=row["bg"], fg=DANGER, relief="flat",
+                      cursor="hand2", width=3,
+                      command=lambda i=i: self._del_point(i)).pack(side="left")
+
+    def _on_edit(self, i, field, var):
+        try:
+            val = float(var.get()) if field < 2 else var.get()
+            self.route[i][field] = val
+            self._update_info()
+        except ValueError:
+            pass
+
+    def _add_point(self):
+        last = self.route[-1] if self.route else [24.0, 121.0, "新增點"]
+        self.route.append([last[0]+0.001, last[1]+0.001, "新增點"])
+        self._refresh_route_rows()
+        self._update_info()
+
+    def _del_point(self, i):
+        if len(self.route) <= 2:
+            messagebox.showwarning("警告", "至少需要 2 個路線點")
+            return
+        self.route.pop(i)
+        self._refresh_route_rows()
+        self._update_info()
+
+    def _update_info(self):
+        try:
+            if len(self.route) < 2:
+                return
+            dist = sum(
+                haversine(self.route[i][0], self.route[i][1],
+                          self.route[i+1][0], self.route[i+1][1])
+                for i in range(len(self.route)-1)
+            )
+            speed = self.speed_var.get()
+            secs = dist / speed if speed > 0 else 0
+            mins = int(secs // 60)
+            sec2 = int(secs % 60)
+            self.info_label.config(
+                text=f"總距離：{dist/1000:.2f} 公里  ·  預計時間：{mins} 分 {sec2} 秒  ·  共 {len(self.route)} 個節點"
+            )
+        except Exception:
+            pass
+
+    def _log(self, msg):
+        self.log.config(state="normal")
+        self.log.insert("end", msg + "\n")
+        self.log.see("end")
+        self.log.config(state="disabled")
+
+    def _start(self):
+        if self.mode.get() == "route" and len(self.route) < 2:
+            messagebox.showerror("錯誤", "請至少設定 2 個路線點")
+            return
+        if self.mode.get() == "pin":
+            try:
+                float(self.pin_lat.get())
+                float(self.pin_lon.get())
+            except ValueError:
+                messagebox.showerror("錯誤", "請輸入有效的緯度/經度數值")
+                return
+        self.running = True
+        self.stop_event.clear()
+        self.start_btn.config(state="disabled")
+        self.stop_btn.config(state="normal")
+        self.progress_var.set(0)
+        if self.mode.get() == "pin":
+            self._log("📌 固定定位模式啟動...")
+        else:
+            self._log("▶  開始模擬...")
+        self.sim_thread = threading.Thread(target=self._run_async, daemon=True)
+        self.sim_thread.start()
+
+    def _stop(self):
+        self.stop_event.set()
+        self._log("⏹  停止中...")
+
+    def _run_async(self):
+        try:
+            if self.mode.get() == "pin":
+                asyncio.run(self._simulate_pin())
+            else:
+                asyncio.run(self._simulate())
+        except Exception as e:
+            self.after(0, self._log, "❌ 錯誤：" + str(e))
+        finally:
+            self.after(0, self._on_done)
+
+    def _on_done(self):
+        self.running = False
+        self.start_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
+
+    async def _simulate(self):
+        try:
+            from pymobiledevice3.tunneld.api import get_tunneld_devices
+            from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
+            from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
+        except ImportError as e:
+            self.after(0, self._log, "❌ 匯入失敗：" + str(e))
+            return
+
+        self.after(0, self._log, "🔍 搜尋裝置中...")
+        try:
+            rsds = await get_tunneld_devices()
+        except Exception as e:
+            self.after(0, self._log, "❌ tunneld 連線失敗：" + str(e))
+            self.after(0, self._log, "   請先以系統管理員執行：pymobiledevice3 remote tunneld")
+            return
+
+        if not rsds:
+            self.after(0, self._log, "❌ 找不到裝置，請確認 USB 已連接")
+            return
+
+        rsd = rsds[0]
+        self.after(0, self._log, "✅ 找到裝置：" + str(rsd.udid))
+
+        speed = self.speed_var.get()
+        loop = self.loop_var.get()
+        route = [(r[0], r[1]) for r in self.route]
+        points = interpolate_points([(r[0], r[1], "") for r in self.route], speed, 1.0)
+        total = len(points)
+
+        async with DvtProvider(rsd) as dvt, LocationSimulation(dvt) as sim:
+            iteration = 0
+            while not self.stop_event.is_set():
+                iteration += 1
+                if loop and iteration > 1:
+                    self.after(0, self._log, "🔁 第 " + str(iteration) + " 次循環")
+
+                for idx, (lat, lon) in enumerate(points):
+                    if self.stop_event.is_set():
+                        break
+                    await sim.set(lat, lon)
+                    progress = (idx + 1) / total * 100
+                    self.after(0, self.progress_var.set, progress)
+                    self.after(0, self.progress_label.config,
+                               {"text": f"{progress:.1f}%  📍 {lat:.6f}, {lon:.6f}"})
+                    await asyncio.sleep(1.0)
+
+                if not loop or self.stop_event.is_set():
+                    break
+
+            self.after(0, self._log, "⏹  恢復真實定位...")
+            await sim.clear()
+            self.after(0, self._log, "✅ 完成！")
+            self.after(0, self.progress_label.config, {"text": "已完成"})
+
+
+    async def _simulate_pin(self):
+        try:
+            from pymobiledevice3.tunneld.api import get_tunneld_devices
+            from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
+            from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
+        except ImportError as e:
+            self.after(0, self._log, "❌ 匯入失敗：" + str(e))
+            return
+
+        self.after(0, self._log, "🔍 搜尋裝置中...")
+        try:
+            rsds = await get_tunneld_devices()
+        except Exception as e:
+            self.after(0, self._log, "❌ tunneld 連線失敗：" + str(e))
+            self.after(0, self._log, "   請先以系統管理員執行：pymobiledevice3 remote tunneld")
+            return
+
+        if not rsds:
+            self.after(0, self._log, "❌ 找不到裝置，請確認 USB 已連接")
+            return
+
+        rsd = rsds[0]
+        lat = float(self.pin_lat.get())
+        lon = float(self.pin_lon.get())
+        self.after(0, self._log, "✅ 找到裝置：" + str(rsd.udid))
+        self.after(0, self._log, f"📌 固定位置：{lat:.6f}, {lon:.6f}")
+
+        async with DvtProvider(rsd) as dvt, LocationSimulation(dvt) as sim:
+            await sim.set(lat, lon)
+            self.after(0, self.progress_var.set, 100)
+            self.after(0, self.progress_label.config,
+                       {"text": f"📌 固定中  {lat:.6f}, {lon:.6f}"})
+            self.after(0, self._log, "✅ 定位已固定！按「停止」可恢復真實定位")
+
+            # 保持定位直到按停止
+            while not self.stop_event.is_set():
+                await asyncio.sleep(0.5)
+
+            self.after(0, self._log, "⏹  恢復真實定位...")
+            await sim.clear()
+            self.after(0, self._log, "✅ 已恢復真實定位")
+            self.after(0, self.progress_label.config, {"text": "已停止"})
+
+
+if __name__ == "__main__":
+    app = GPSApp()
+    app.mainloop()
