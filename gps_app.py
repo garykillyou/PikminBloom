@@ -283,16 +283,18 @@ class GPSApp(tk.Tk):
         self.left_col = tk.Frame(columns_frame, bg=BG)
         self.right_col = tk.Frame(columns_frame, bg=BG)
 
-        # ── 控制按鈕（左欄）──
+        # ── 控制按鈕（左欄，兩顆按鈕等寬並填滿整列）──
         btn_frame = tk.Frame(self.left_col, bg=BG, pady=8)
-        btn_frame.pack()
+        btn_frame.pack(fill="x")
+        btn_frame.columnconfigure(0, weight=1, uniform="ctrl_btns")
+        btn_frame.columnconfigure(1, weight=1, uniform="ctrl_btns")
 
         self.start_btn = tk.Button(btn_frame, text="▶  開始模擬",
                                    font=("Segoe UI", 13, "bold"),
                                    bg=ACCENT, fg="#000", relief="flat",
                                    padx=30, pady=12, cursor="hand2",
                                    command=self._start)
-        self.start_btn.pack(side="left", padx=8)
+        self.start_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
         self.stop_btn = tk.Button(btn_frame, text="⏹  停止",
                                   font=("Segoe UI", 13, "bold"),
@@ -300,7 +302,7 @@ class GPSApp(tk.Tk):
                                   padx=30, pady=12, cursor="hand2",
                                   state="disabled",
                                   command=self._stop)
-        self.stop_btn.pack(side="left", padx=8)
+        self.stop_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         # ── 進度條（左欄）──
         self.progress_var = tk.DoubleVar(value=0)
