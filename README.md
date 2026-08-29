@@ -14,9 +14,11 @@
 - 🗺 **路線移動模式** — 設定多個座標點，讓 iPhone 沿路線緩慢移動
 - 📌 **固定定位模式** — 將 iPhone 定位釘在指定座標不動
 - ⭐ **最愛地點** — 儲存常用地點或路線，下次一鍵載入
+- 📥 **KML 路線匯入** — 直接匯入 Google Earth / Google 地圖匯出的 KML 檔案，自動轉成路線最愛
 - 🚶 **速度調整** — 支援步行、慢跑、騎車、開車等速度預設
 - 🔄 **循環模式** — 路線走完自動從頭再走
 - 📊 **即時進度** — 顯示目前座標與完成百分比
+- 🌓 **深色 / 淺色主題** — 一鍵切換，偏好會自動記住
 
 ---
 
@@ -37,17 +39,17 @@
 
 前往 [python.org](https://www.python.org/downloads/) 下載並安裝，記得勾選 **Add Python to PATH**。
 
-**2. 安裝相依套件**
+**2. 下載本專案**
 
 ```bash
-pip install pymobiledevice3
+git clone https://github.com/garykillyou/PikminBloom.git
+cd PikminBloom
 ```
 
-**3. 下載本專案**
+**3. 安裝相依套件**
 
 ```bash
-git clone https://github.com/你的帳號/iphone-gps-simulator.git
-cd iphone-gps-simulator
+pip install -r requirements.txt
 ```
 
 ---
@@ -79,6 +81,8 @@ INFO: Uvicorn running on http://127.0.0.1:49151
 python gps_app.py
 ```
 
+也可以直接雙擊 `run.bat`，會以不顯示主控台視窗的方式啟動。
+
 ---
 
 ## 🖥️ 介面說明
@@ -97,18 +101,25 @@ python gps_app.py
 
 ### 最愛地點
 - 點「＋ 儲存目前路線」或「＋ 儲存目前座標」儲存
+- 點「＋ 匯入 KML 路線」選擇 KML 檔案，自動解析路線座標並存成路線最愛
 - 點「載入」一鍵套用
 - 資料儲存於 `gps_favorites.json`，重開 App 後保留
+
+### 主題切換
+- 點右上角的主題按鈕，即可在深色／淺色介面間切換
+- 偏好會存於 `gps_settings.json`，下次啟動自動套用上次選擇
 
 ---
 
 ## 📁 檔案結構
 
 ```
-iphone-gps-simulator/
+PikminBloom/
 ├── gps_app.py          # 主程式（GUI App）
 ├── requirements.txt    # 相依套件
+├── run.bat             # 免主控台視窗啟動捷徑
 ├── gps_favorites.json  # 最愛地點資料（自動產生）
+├── gps_settings.json   # 主題等偏好設定（自動產生）
 └── README.md
 ```
 

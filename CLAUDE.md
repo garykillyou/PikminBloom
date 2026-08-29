@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 單一檔案 Python/Tkinter 桌面工具，透過 `pymobiledevice3` 模擬 iPhone（iOS 17+）的 GPS 定位，
 免越獄、免 iTunes，僅需 USB 連線。整個應用程式邏輯都在 [gps_app.py](gps_app.py) 一個檔案中，
-沒有其他模組、套件或子目錄。
+沒有其他模組、套件或子目錄。執行期間會在同目錄產生兩個 JSON 狀態檔：`gps_favorites.json`
+（最愛地點/路線）與 `gps_settings.json`（目前僅存主題偏好）。
 
 ## 常用指令
 
@@ -46,8 +47,20 @@ python gps_app.py
 ### 最愛地點（Favorites）
 - 儲存在執行檔同目錄的 `gps_favorites.json`（`FAVORITES_FILE`），由 `load_favorites()` / `save_favorites()` 讀寫，內容是 list of dict，`type` 欄位為 `"pin"` 或 `"route"`。
 - UI 清單（`_refresh_fav_list`）與載入邏輯（`_load_fav`）都靠這個 `type` 欄位分派要切到哪個模式、要填哪些欄位；新增最愛欄位時要同步確認存檔格式與讀取端都對得起來。
+- 路線最愛除了手動輸入座標（`_save_current_route_as_fav`）外，也可從 KML 檔案匯入（`_import_kml_as_fav` → `parse_kml_route()`）：解析第一條 `LineString` 作為路線座標，並用起訖點附近（約 50 公尺內）的 `Point` 名稱自動當作起訖點備註，其餘中間點備註留空。
+
+### 主題系統（深色 / 淺色）
+- 兩組色票集中定義在檔案開頭的 `THEMES` dict（`"dark"` / `"light"`），`apply_theme(name)` 會把對應色票寫入模組層級的全域變數（`BG`/`BG2`/`BG3`/`ACCENT`/`ACCENT2`/`SUCCESS`/`DANGER`/`TEXT`/`TEXT2`/`TEXT_ON_ACCENT`），供整份檔案的 UI 建構函式讀取。
+- 目前套用的主題名稱存在 `self.theme_name`，並持久化在 `gps_settings.json`（`load_settings()` / `save_settings()`）；啟動時讀取上次的偏好，找不到或值不合法就 fallback 回 `"dark"`。
+- `_toggle_theme()` 切換主題時，因為顏色是模組全域變數而非 widget 屬性，唯一能讓所有既有 widget 換色的方式是整個銷毀重建：先暫存目前輸入框/勾選狀態，`apply_theme()` 換色後銷毀 `self.container` 並重新呼叫 `_build_scroll_container()` + `_build_ui()`，最後再把暫存的狀態寫回新建立的 widget。新增任何有「使用者輸入中狀態」的欄位時，記得同步加進這段暫存/還原流程，否則切換主題會遺失使用者輸入。
+
+### 視窗捲動與響應式版面
+- 整個視窗內容包在一個可捲動的 `Canvas` + `Frame`（`_build_scroll_container()` 建立 `self.canvas`/`self.scroll_frame`），捲軸（`self.scrollbar`）只有在內容高度超過可視區域時才會 `pack()` 顯示（`_update_scrollbar_visibility()`），內容變矮時會自動 `pack_forget()`。
+- 主要內容區以 `columns_frame` 用 `grid` 分成 `left_col`/`right_col` 兩欄；`_apply_responsive_layout(width)` 依視窗寬度是否超過 `WIDE_LAYOUT_BREAKPOINT`（1000px）決定兩欄要左右並排（`grid(row=0, column=0/1, ...)`）還是上下堆疊（`columnspan=2`），寬窄狀態改變時才會重新 `grid`，避免不必要的重排。
+- 路線座標點表格另外包了一層獨立的 `route_canvas`（`_update_route_table_height()`），最多顯示 `ROUTE_TABLE_MAX_ROWS`（15）列，超過才出現自己的捲軸，邏輯與外層視窗捲動並行但各自獨立管理捲軸顯示/隱藏。
+- 滑鼠滾輪事件是全域綁定（`canvas.bind_all("<MouseWheel>")`），`_on_mousewheel` 內會判斷游標是否位於 `route_container` 之下，藉此決定要捲動外層視窗還是路線表格內層的 `route_canvas`。
 
 ### UI 結構
-- 全部手刻 `tkinter`/`ttk`（無第三方 UI 框架），深色主題色票集中定義在檔案開頭（`BG`/`BG2`/`BG3`/`ACCENT`/`ACCENT2`/`SUCCESS`/`DANGER`/`TEXT`/`TEXT2`）。
-- `_build_ui()` 一次性建構所有面板；模式切換靠 `_switch_mode()` 用 `pack()`/`pack_forget()` 顯示或隱藏對應的 Frame（`pin_frame`、`speed_frame_ref`、`route_section` 等），而不是建立多個視窗或使用 `Notebook`。
+- 全部手刻 `tkinter`/`ttk`（無第三方 UI 框架），顏色一律讀取上述「主題系統」的模組全域變數，不要在 widget 裡寫死色碼。
+- `_build_ui()` 一次性建構所有面板；模式切換靠 `_switch_mode()` 用 `pack()`/`pack_forget()` 顯示或隱藏對應的 Frame（`pin_frame`、`speed_frame_ref`、`route_section` 等），而不是建立多個視窗或使用 `Notebook`。切主題（見上）會整個銷毀重建 `_build_ui()`，因此 `_build_ui()` 內不應假設只會被呼叫一次。
 - 路線點表格（`route_container`）是動態產生的：每次新增/刪除點都呼叫 `_refresh_route_rows()` 整個重建所有列，而不是局部更新。
