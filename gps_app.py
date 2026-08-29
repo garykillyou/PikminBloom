@@ -7,10 +7,11 @@ import asyncio
 import math
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, simpledialog
+from tkinter import ttk, messagebox, scrolledtext, simpledialog, filedialog
 import sys
 import json
 import os
+import xml.etree.ElementTree as ET
 
 FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gps_favorites.json")
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gps_settings.json")
@@ -27,6 +28,87 @@ def load_favorites():
 def save_favorites(favs):
     with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
         json.dump(favs, f, ensure_ascii=False, indent=2)
+
+def _kml_tag(elem):
+    """去掉 XML namespace，取得元素的原始標籤名稱"""
+    return elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+
+def parse_kml_route(path):
+    """解析 KML 檔案，取出第一條 LineString 路線座標，
+    並用最接近起訖點的 Point 名稱標記備註。
+    回傳 (route, doc_name)，route 為 [[緯度, 經度, 備註], ...]，找不到路線時 route 為 None。"""
+    tree = ET.parse(path)
+    root = tree.getroot()
+
+    doc_name = ""
+    for elem in root.iter():
+        if _kml_tag(elem) == "name":
+            doc_name = (elem.text or "").strip()
+            break
+
+    line_points = []
+    marker_points = []
+    for placemark in root.iter():
+        if _kml_tag(placemark) != "Placemark":
+            continue
+        pname = ""
+        for child in placemark.iter():
+            if _kml_tag(child) == "name":
+                pname = (child.text or "").strip()
+                break
+        line_string = point_el = None
+        for child in placemark.iter():
+            ctag = _kml_tag(child)
+            if ctag == "LineString" and line_string is None:
+                line_string = child
+            elif ctag == "Point" and point_el is None:
+                point_el = child
+
+        if line_string is not None and not line_points:
+            coords_text = ""
+            for child in line_string.iter():
+                if _kml_tag(child) == "coordinates":
+                    coords_text = child.text or ""
+                    break
+            for token in coords_text.split():
+                parts = token.split(",")
+                if len(parts) >= 2:
+                    lon, lat = float(parts[0]), float(parts[1])
+                    line_points.append([lat, lon, ""])
+        elif point_el is not None:
+            coords_text = ""
+            for child in point_el.iter():
+                if _kml_tag(child) == "coordinates":
+                    coords_text = child.text or ""
+                    break
+            tokens = coords_text.split()
+            if tokens:
+                parts = tokens[0].split(",")
+                if len(parts) >= 2:
+                    lon, lat = float(parts[0]), float(parts[1])
+                    marker_points.append((lat, lon, pname))
+
+    if not line_points:
+        return None, doc_name
+
+    def nearest_marker_name(lat, lon):
+        best_name, best_d = None, 0.0005  # 約 50 公尺內才採用
+        for mlat, mlon, mname in marker_points:
+            if not mname:
+                continue
+            d = ((lat - mlat) ** 2 + (lon - mlon) ** 2) ** 0.5
+            if d < best_d:
+                best_d, best_name = d, mname
+        return best_name
+
+    start_name = nearest_marker_name(*line_points[0][:2])
+    end_name = nearest_marker_name(*line_points[-1][:2])
+    if start_name:
+        line_points[0][2] = start_name
+    if end_name:
+        line_points[-1][2] = end_name
+
+    return line_points, doc_name
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
@@ -378,6 +460,13 @@ class GPSApp(tk.Tk):
                                     command=self._save_current_route_as_fav)
         save_route_btn.pack(side="right", padx=4)
 
+        # 匯入 KML 檔案產生路線最愛按鈕
+        import_kml_btn = tk.Button(fav_title_row, text="＋ 匯入 KML 路線",
+                                    font=("Segoe UI", 9), bg=BG3, fg=TEXT2,
+                                    relief="flat", padx=10, pady=4, cursor="hand2",
+                                    command=self._import_kml_as_fav)
+        import_kml_btn.pack(side="right", padx=4)
+
         # 最愛列表
         self.fav_list_frame = tk.Frame(self.fav_frame, bg=BG2)
         self.fav_list_frame.pack(fill="x")
@@ -503,6 +592,10 @@ class GPSApp(tk.Tk):
         route_label_frame.pack(fill="x", padx=0, pady=(4, 4))
         tk.Label(route_label_frame, text="路線座標點",
                  font=("Segoe UI", 11, "bold"), bg=BG, fg=TEXT).pack(side="left")
+        tk.Button(route_label_frame, text="🗑 清空座標點",
+                  font=("Segoe UI", 9), bg=BG3, fg=TEXT2,
+                  relief="flat", padx=10, pady=3, cursor="hand2",
+                  command=self._clear_route_points).pack(side="right")
         tk.Button(route_label_frame, text="＋ 新增點",
                   font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT,
                   relief="flat", padx=10, pady=3, cursor="hand2",
@@ -515,10 +608,11 @@ class GPSApp(tk.Tk):
         # 路線表格
         cols_frame = tk.Frame(self.route_section, bg=BG3)
         cols_frame.pack(fill="x", padx=0)
-        for txt, w in [("#", 4), ("緯度", 18), ("經度", 18), ("備註", 22), ("", 6)]:
+        for txt, w, exp in [("#", 4, False), ("緯度", 10, False), ("經度", 10, False),
+                            ("備註", 10, True), ("", 6, False)]:
             tk.Label(cols_frame, text=txt, font=("Segoe UI", 9),
                      bg=BG3, fg=TEXT2, width=w, anchor="w",
-                     padx=6, pady=4).pack(side="left")
+                     padx=6, pady=4).pack(side="left", fill="x", expand=exp)
 
         # 表格內容區：用一個小型 canvas 包住，最多顯示 ROUTE_TABLE_MAX_ROWS 列，
         # 超過時才出現右側捲軸（同樣依內容自動顯示/隱藏）。
@@ -580,10 +674,10 @@ class GPSApp(tk.Tk):
             tk.Label(row, text=icon, font=("Segoe UI Emoji", 10),
                      bg=row["bg"], fg=TEXT2, width=3).pack(side="left", padx=4)
 
-            # 名稱
+            # 名稱（佔最大表格寬度比例）
             tk.Label(row, text=fav["name"],
                      font=("Segoe UI", 10, "bold"), bg=row["bg"], fg=TEXT,
-                     width=18, anchor="w").pack(side="left")
+                     width=10, anchor="w").pack(side="left", fill="x", expand=True, padx=(0, 4))
 
             # 座標預覽
             if fav["type"] == "pin":
@@ -591,7 +685,7 @@ class GPSApp(tk.Tk):
             else:
                 preview = f"{len(fav['route'])} 個節點"
             tk.Label(row, text=preview, font=("Segoe UI", 9),
-                     bg=row["bg"], fg=TEXT2, width=20, anchor="w").pack(side="left")
+                     bg=row["bg"], fg=TEXT2, width=14, anchor="w").pack(side="left")
 
             # 載入按鈕
             load_btn = tk.Button(row, text="載入",
@@ -640,6 +734,32 @@ class GPSApp(tk.Tk):
         self._refresh_fav_list()
         self._log("⭐ 已儲存路線：" + name)
 
+    def _import_kml_as_fav(self):
+        path = filedialog.askopenfilename(
+            title="選擇 KML 檔案",
+            filetypes=[("KML 檔案", "*.kml"), ("所有檔案", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            route, doc_name = parse_kml_route(path)
+        except Exception as e:
+            messagebox.showerror("錯誤", f"KML 檔案解析失敗：\n{e}")
+            return
+        if not route or len(route) < 2:
+            messagebox.showerror("錯誤", "此 KML 檔案內找不到有效的路線（LineString 座標）")
+            return
+
+        default_name = doc_name or os.path.splitext(os.path.basename(path))[0]
+        name = simpledialog.askstring("儲存最愛", "請輸入路線名稱：",
+                                       parent=self, initialvalue=default_name)
+        if not name:
+            return
+        self.favorites.append({"type": "route", "name": name, "route": route})
+        save_favorites(self.favorites)
+        self._refresh_fav_list()
+        self._log(f"⭐ 已從 KML 匯入路線：{name}（共 {len(route)} 個路徑點）")
+
     def _load_fav(self, fav):
         if fav["type"] == "pin":
             self._switch_mode("pin")
@@ -673,13 +793,13 @@ class GPSApp(tk.Tk):
             row.pack(fill="x")
             tk.Label(row, text=str(i+1), width=4, font=("Segoe UI", 9),
                      bg=row["bg"], fg=TEXT2, padx=6, pady=4).pack(side="left")
-            for j, (w, key) in enumerate([(18, 0), (18, 1), (22, 2)]):
+            for j, (w, exp) in enumerate([(10, False), (10, False), (10, True)]):
                 var = tk.StringVar(value=str(pt[j]))
                 e = tk.Entry(row, textvariable=var, width=w,
                              font=("Segoe UI", 9), bg=row["bg"],
                              fg=ACCENT if j < 2 else TEXT,
                              insertbackground=ACCENT, relief="flat", bd=2)
-                e.pack(side="left", padx=2)
+                e.pack(side="left", padx=2, fill="x", expand=exp)
                 idx, field = i, j
                 var.trace_add("write", lambda *a, i=idx, f=field, v=var: self._on_edit(i, f, v))
             tk.Button(row, text="✕", font=("Segoe UI", 8),
@@ -724,6 +844,16 @@ class GPSApp(tk.Tk):
             messagebox.showwarning("警告", "至少需要 2 個路線點")
             return
         self.route.pop(i)
+        self._refresh_route_rows()
+        self._update_info()
+
+    def _clear_route_points(self):
+        if not self.route:
+            return
+        if not messagebox.askyesno("確認清空", "確定要清空所有路線座標點嗎？"):
+            return
+        self.route = []
+        self.info_label.config(text="")
         self._refresh_route_rows()
         self._update_info()
 
