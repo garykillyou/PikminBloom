@@ -13,6 +13,7 @@ import json
 import os
 
 FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gps_favorites.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gps_settings.json")
 
 def load_favorites():
     if os.path.exists(FAVORITES_FILE):
@@ -27,21 +28,34 @@ def save_favorites(favs):
     with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
         json.dump(favs, f, ensure_ascii=False, indent=2)
 
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+
 # ── 顏色主題（深色 / 淺色）────────────────────
 THEMES = {
     "dark": {
-        "BG": "#0f0f14", "BG2": "#1a1a24", "BG3": "#22223a",
-        "ACCENT": "#00e5ff", "ACCENT2": "#7c4dff",
-        "SUCCESS": "#00e676", "DANGER": "#ff1744",
-        "TEXT": "#e8e8f0", "TEXT2": "#8888aa",
-        "TEXT_ON_ACCENT": "#e8e8f0",
+        "BG": "#1D1616", "BG2": "#2A1F1F", "BG3": "#3D2424",
+        "ACCENT": "#D84040", "ACCENT2": "#8E1616",
+        "SUCCESS": "#00e676", "DANGER": "#D84040",
+        "TEXT": "#EEEEEE", "TEXT2": "#A89A9A",
+        "TEXT_ON_ACCENT": "#EEEEEE",
     },
     "light": {
-        "BG": "#f3f4f9", "BG2": "#ffffff", "BG3": "#e6e8f2",
-        "ACCENT": "#0aa8c4", "ACCENT2": "#7c4dff",
-        "SUCCESS": "#1b8a3d", "DANGER": "#e5484d",
-        "TEXT": "#1b1b26", "TEXT2": "#5c5c74",
-        "TEXT_ON_ACCENT": "#ffffff",
+        "BG": "#EFFFFB", "BG2": "#ffffff", "BG3": "#DCEEE7",
+        "ACCENT": "#4F98CA", "ACCENT2": "#50D890",
+        "SUCCESS": "#50D890", "DANGER": "#e5484d",
+        "TEXT": "#272727", "TEXT2": "#5c5c5c",
+        "TEXT_ON_ACCENT": "#EFFFFB",
     },
 }
 
@@ -98,7 +112,6 @@ class GPSApp(tk.Tk):
         super().__init__()
         self.title("iPhone GPS 路線模擬器")
         self.geometry("1500x820")
-        self.configure(bg=BG)
         self.resizable(True, True)
         self.minsize(560, 360)
 
@@ -109,7 +122,12 @@ class GPSApp(tk.Tk):
         self.mode = tk.StringVar(value="route")
         self.favorites = load_favorites()
         self._layout_wide = None
-        self.theme_name = "dark"
+        self.settings = load_settings()
+        self.theme_name = self.settings.get("theme", "dark")
+        if self.theme_name not in THEMES:
+            self.theme_name = "dark"
+        apply_theme(self.theme_name)
+        self.configure(bg=BG)
 
         self._build_scroll_container()
         self._build_ui()
@@ -232,6 +250,8 @@ class GPSApp(tk.Tk):
 
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
         apply_theme(self.theme_name)
+        self.settings["theme"] = self.theme_name
+        save_settings(self.settings)
 
         self.configure(bg=BG)
         self.container.destroy()

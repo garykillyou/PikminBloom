@@ -1,6 +1,9 @@
 # 最愛地點資料（個人資料不上傳）
 gps_favorites.json
 
+# 本機設定（主題偏好等，個人資料不上傳）
+gps_settings.json
+
 # Python
 __pycache__/
 *.py[cod]
