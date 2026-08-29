@@ -39,6 +39,8 @@ TEXT     = "#e8e8f0"
 TEXT2    = "#8888aa"
 # ─────────────────────────────────────────────
 
+WIDE_LAYOUT_BREAKPOINT = 1000
+
 DEFAULT_ROUTE = [
     (24.1368, 120.6862, "台中火車站"),
     (24.1390, 120.6800, "台灣大道一段"),
@@ -74,9 +76,10 @@ class GPSApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("iPhone GPS 路線模擬器")
-        self.geometry("720x820")
+        self.geometry("1500x820")
         self.configure(bg=BG)
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(560, 360)
 
         self.running = False
         self.stop_event = threading.Event()
@@ -84,12 +87,57 @@ class GPSApp(tk.Tk):
         self.route = [list(r) for r in DEFAULT_ROUTE]
         self.mode = tk.StringVar(value="route")
         self.favorites = load_favorites()
+        self._layout_wide = None
 
+        self._build_scroll_container()
         self._build_ui()
+        self._apply_responsive_layout(1500)
+
+    def _build_scroll_container(self):
+        container = tk.Frame(self, bg=BG)
+        container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(container, bg=BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.scroll_frame = tk.Frame(canvas, bg=BG)
+        frame_id = canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        self.scroll_frame.bind("<Configure>", _on_frame_configure)
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(frame_id, width=event.width)
+            self._apply_responsive_layout(event.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+    def _apply_responsive_layout(self, width):
+        if not hasattr(self, "left_col"):
+            return
+        wide = width > WIDE_LAYOUT_BREAKPOINT
+        if wide == self._layout_wide:
+            return
+        self._layout_wide = wide
+        self.left_col.grid_forget()
+        self.right_col.grid_forget()
+        if wide:
+            self.left_col.grid(row=0, column=0, sticky="new", padx=(24, 12))
+            self.right_col.grid(row=0, column=1, sticky="new", padx=(12, 24))
+        else:
+            self.left_col.grid(row=0, column=0, columnspan=2, sticky="ew", padx=24)
+            self.right_col.grid(row=1, column=0, columnspan=2, sticky="ew", padx=24)
 
     def _build_ui(self):
         # ── 標題 ──
-        title_frame = tk.Frame(self, bg=BG, pady=20)
+        title_frame = tk.Frame(self.scroll_frame, bg=BG, pady=20)
         title_frame.pack(fill="x", padx=30)
 
         tk.Label(title_frame, text="📍", font=("Segoe UI Emoji", 28),
@@ -101,9 +149,92 @@ class GPSApp(tk.Tk):
         tk.Label(title_col, text="iPhone iOS 17/18+  ·  需先執行 tunneld",
                  font=("Segoe UI", 10), bg=BG, fg=TEXT2).pack(anchor="w")
 
-        # ── 模式切換 ──
-        mode_frame = tk.Frame(self, bg=BG2, padx=20, pady=12)
-        mode_frame.pack(fill="x", padx=24, pady=(0, 8))
+        # ── 內容分欄（>1000px 寬時左右並排且等寬，否則上下堆疊）──
+        columns_frame = tk.Frame(self.scroll_frame, bg=BG)
+        columns_frame.pack(fill="both", expand=True)
+        columns_frame.columnconfigure(0, weight=1, uniform="cols")
+        columns_frame.columnconfigure(1, weight=1, uniform="cols")
+
+        self.left_col = tk.Frame(columns_frame, bg=BG)
+        self.right_col = tk.Frame(columns_frame, bg=BG)
+
+        # ── 控制按鈕（左欄）──
+        btn_frame = tk.Frame(self.left_col, bg=BG, pady=8)
+        btn_frame.pack()
+
+        self.start_btn = tk.Button(btn_frame, text="▶  開始模擬",
+                                   font=("Segoe UI", 13, "bold"),
+                                   bg=ACCENT, fg="#000", relief="flat",
+                                   padx=30, pady=12, cursor="hand2",
+                                   command=self._start)
+        self.start_btn.pack(side="left", padx=8)
+
+        self.stop_btn = tk.Button(btn_frame, text="⏹  停止",
+                                  font=("Segoe UI", 13, "bold"),
+                                  bg=DANGER, fg=TEXT, relief="flat",
+                                  padx=30, pady=12, cursor="hand2",
+                                  state="disabled",
+                                  command=self._stop)
+        self.stop_btn.pack(side="left", padx=8)
+
+        # ── 進度條（左欄）──
+        self.progress_var = tk.DoubleVar(value=0)
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("GPS.Horizontal.TProgressbar",
+                        troughcolor=BG3, background=ACCENT,
+                        bordercolor=BG3, lightcolor=ACCENT,
+                        darkcolor=ACCENT, thickness=8)
+        self.progress_bar = ttk.Progressbar(self.left_col, variable=self.progress_var,
+                                             maximum=100, length=660,
+                                             style="GPS.Horizontal.TProgressbar")
+        self.progress_bar.pack(fill="x", pady=8)
+
+        self.progress_label = tk.Label(self.left_col, text="",
+                                       font=("Segoe UI", 10), bg=BG, fg=TEXT2)
+        self.progress_label.pack()
+
+        # ── 日誌（左欄）──
+        tk.Label(self.left_col, text="執行日誌", font=("Segoe UI", 10, "bold"),
+                 bg=BG, fg=TEXT2).pack(anchor="w", pady=(12, 2))
+        self.log = scrolledtext.ScrolledText(self.left_col, height=8,
+                                              font=("Consolas", 9),
+                                              bg=BG2, fg=TEXT2,
+                                              insertbackground=ACCENT,
+                                              relief="flat", bd=0,
+                                              state="disabled")
+        self.log.pack(fill="x", pady=(0, 20))
+
+        # ── 最愛地點面板（左欄）──
+        self.fav_frame = tk.Frame(self.left_col, bg=BG2, padx=20, pady=14)
+        self.fav_frame.pack(fill="x", pady=(0, 8))
+
+        fav_title_row = tk.Frame(self.fav_frame, bg=BG2)
+        fav_title_row.pack(fill="x", pady=(0, 10))
+        tk.Label(fav_title_row, text="⭐ 最愛地點",
+                 font=("Segoe UI", 11, "bold"), bg=BG2, fg=TEXT).pack(side="left")
+
+        # 儲存目前定位按鈕
+        save_pin_btn = tk.Button(fav_title_row, text="＋ 儲存目前座標",
+                                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT,
+                                  relief="flat", padx=10, pady=4, cursor="hand2",
+                                  command=self._save_current_pin_as_fav)
+        save_pin_btn.pack(side="right", padx=(4, 0))
+
+        save_route_btn = tk.Button(fav_title_row, text="＋ 儲存目前路線",
+                                    font=("Segoe UI", 9), bg=BG3, fg=TEXT2,
+                                    relief="flat", padx=10, pady=4, cursor="hand2",
+                                    command=self._save_current_route_as_fav)
+        save_route_btn.pack(side="right", padx=4)
+
+        # 最愛列表
+        self.fav_list_frame = tk.Frame(self.fav_frame, bg=BG2)
+        self.fav_list_frame.pack(fill="x")
+        self._refresh_fav_list()
+
+        # ── 模式切換（右欄）──
+        mode_frame = tk.Frame(self.right_col, bg=BG2, padx=20, pady=12)
+        mode_frame.pack(fill="x", pady=(0, 8))
 
         tk.Label(mode_frame, text="模式選擇", font=("Segoe UI", 11, "bold"),
                  bg=BG2, fg=TEXT).pack(side="left", padx=(0, 16))
@@ -122,8 +253,8 @@ class GPSApp(tk.Tk):
                                       command=lambda: self._switch_mode("pin"))
         self.pin_mode_btn.pack(side="left", padx=4)
 
-        # ── 固定定位面板（預設隱藏）──
-        self.pin_frame = tk.Frame(self, bg=BG2, padx=20, pady=16)
+        # ── 固定定位面板（預設隱藏，右欄）──
+        self.pin_frame = tk.Frame(self.right_col, bg=BG2, padx=20, pady=16)
 
         tk.Label(self.pin_frame, text="固定座標",
                  font=("Segoe UI", 11, "bold"), bg=BG2, fg=TEXT).grid(
@@ -172,35 +303,9 @@ class GPSApp(tk.Tk):
             btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
 
-        # ── 最愛地點面板 ──
-        self.fav_frame = tk.Frame(self, bg=BG2, padx=20, pady=14)
-
-        fav_title_row = tk.Frame(self.fav_frame, bg=BG2)
-        fav_title_row.pack(fill="x", pady=(0, 10))
-        tk.Label(fav_title_row, text="⭐ 最愛地點",
-                 font=("Segoe UI", 11, "bold"), bg=BG2, fg=TEXT).pack(side="left")
-
-        # 儲存目前定位按鈕
-        save_pin_btn = tk.Button(fav_title_row, text="＋ 儲存目前座標",
-                                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT,
-                                  relief="flat", padx=10, pady=4, cursor="hand2",
-                                  command=self._save_current_pin_as_fav)
-        save_pin_btn.pack(side="right", padx=(4, 0))
-
-        save_route_btn = tk.Button(fav_title_row, text="＋ 儲存目前路線",
-                                    font=("Segoe UI", 9), bg=BG3, fg=TEXT2,
-                                    relief="flat", padx=10, pady=4, cursor="hand2",
-                                    command=self._save_current_route_as_fav)
-        save_route_btn.pack(side="right", padx=4)
-
-        # 最愛列表
-        self.fav_list_frame = tk.Frame(self.fav_frame, bg=BG2)
-        self.fav_list_frame.pack(fill="x")
-        self._refresh_fav_list()
-
         # ── 速度設定 ──
-        speed_frame = tk.Frame(self, bg=BG2, padx=20, pady=16)
-        speed_frame.pack(fill="x", padx=24, pady=(0, 12))
+        speed_frame = tk.Frame(self.right_col, bg=BG2, padx=20, pady=16)
+        speed_frame.pack(fill="x", pady=(0, 12))
         self.speed_frame_ref = speed_frame
 
         tk.Label(speed_frame, text="移動速度", font=("Segoe UI", 11, "bold"),
@@ -240,11 +345,11 @@ class GPSApp(tk.Tk):
                        activeforeground=TEXT).pack(side="left", padx=16)
 
         # ── 路線點 ──
-        self.route_section = tk.Frame(self, bg=BG)
+        self.route_section = tk.Frame(self.right_col, bg=BG)
         self.route_section.pack(fill="x", padx=0)
 
         route_label_frame = tk.Frame(self.route_section, bg=BG)
-        route_label_frame.pack(fill="x", padx=24, pady=(4, 4))
+        route_label_frame.pack(fill="x", padx=0, pady=(4, 4))
         tk.Label(route_label_frame, text="路線座標點",
                  font=("Segoe UI", 11, "bold"), bg=BG, fg=TEXT).pack(side="left")
         tk.Button(route_label_frame, text="＋ 新增點",
@@ -254,71 +359,21 @@ class GPSApp(tk.Tk):
 
         # 路線表格
         cols_frame = tk.Frame(self.route_section, bg=BG3)
-        cols_frame.pack(fill="x", padx=24)
+        cols_frame.pack(fill="x", padx=0)
         for txt, w in [("#", 4), ("緯度", 18), ("經度", 18), ("備註", 22), ("", 6)]:
             tk.Label(cols_frame, text=txt, font=("Segoe UI", 9),
                      bg=BG3, fg=TEXT2, width=w, anchor="w",
                      padx=6, pady=4).pack(side="left")
 
         self.route_container = tk.Frame(self.route_section, bg=BG2)
-        self.route_container.pack(fill="x", padx=24)
+        self.route_container.pack(fill="x", padx=0)
         self._refresh_route_rows()
 
-        # 最愛面板（路線模式預設顯示）
-        self.fav_frame.pack(fill="x", padx=24, pady=(0, 8))
-
         # 距離/時間資訊
-        self.info_label = tk.Label(self, text="",
+        self.info_label = tk.Label(self.right_col, text="",
                                    font=("Segoe UI", 10), bg=BG, fg=TEXT2)
         self.info_label.pack(pady=6)
         self._update_info()
-
-        # ── 控制按鈕 ──
-        btn_frame = tk.Frame(self, bg=BG, pady=8)
-        btn_frame.pack()
-
-        self.start_btn = tk.Button(btn_frame, text="▶  開始模擬",
-                                   font=("Segoe UI", 13, "bold"),
-                                   bg=ACCENT, fg="#000", relief="flat",
-                                   padx=30, pady=12, cursor="hand2",
-                                   command=self._start)
-        self.start_btn.pack(side="left", padx=8)
-
-        self.stop_btn = tk.Button(btn_frame, text="⏹  停止",
-                                  font=("Segoe UI", 13, "bold"),
-                                  bg=DANGER, fg=TEXT, relief="flat",
-                                  padx=30, pady=12, cursor="hand2",
-                                  state="disabled",
-                                  command=self._stop)
-        self.stop_btn.pack(side="left", padx=8)
-
-        # ── 進度條 ──
-        self.progress_var = tk.DoubleVar(value=0)
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("GPS.Horizontal.TProgressbar",
-                        troughcolor=BG3, background=ACCENT,
-                        bordercolor=BG3, lightcolor=ACCENT,
-                        darkcolor=ACCENT, thickness=8)
-        self.progress_bar = ttk.Progressbar(self, variable=self.progress_var,
-                                             maximum=100, length=660,
-                                             style="GPS.Horizontal.TProgressbar")
-        self.progress_bar.pack(pady=8)
-
-        self.progress_label = tk.Label(self, text="",
-                                       font=("Segoe UI", 10), bg=BG, fg=TEXT2)
-        self.progress_label.pack()
-
-        # ── 日誌 ──
-        tk.Label(self, text="執行日誌", font=("Segoe UI", 10, "bold"),
-                 bg=BG, fg=TEXT2).pack(anchor="w", padx=26, pady=(12, 2))
-        self.log = scrolledtext.ScrolledText(self, height=8,
-                                              font=("Consolas", 9),
-                                              bg=BG2, fg=TEXT2,
-                                              insertbackground=ACCENT,
-                                              relief="flat", bd=0,
-                                              state="disabled")
-        self.log.pack(fill="x", padx=24, pady=(0, 20))
 
     def _switch_mode(self, mode):
         self.mode.set(mode)
@@ -326,8 +381,7 @@ class GPSApp(tk.Tk):
             self.route_mode_btn.config(bg=ACCENT, fg="#000")
             self.pin_mode_btn.config(bg=BG3, fg=TEXT2)
             self.pin_frame.pack_forget()
-            self.fav_frame.pack(fill="x", padx=24, pady=(0, 8))
-            self.speed_frame_ref.pack(fill="x", padx=24, pady=(0, 12))
+            self.speed_frame_ref.pack(fill="x", pady=(0, 12))
             self.route_section.pack(fill="x", padx=0)
             self.info_label.pack(pady=6)
             self.start_btn.config(text="▶  開始模擬")
@@ -337,8 +391,7 @@ class GPSApp(tk.Tk):
             self.speed_frame_ref.pack_forget()
             self.route_section.pack_forget()
             self.info_label.pack_forget()
-            self.pin_frame.pack(fill="x", padx=24, pady=(0, 8))
-            self.fav_frame.pack(fill="x", padx=24, pady=(0, 8))
+            self.pin_frame.pack(fill="x", pady=(0, 8))
             self.start_btn.config(text="📌  固定定位")
 
     def _refresh_fav_list(self):
