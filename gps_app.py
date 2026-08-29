@@ -27,19 +27,40 @@ def save_favorites(favs):
     with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
         json.dump(favs, f, ensure_ascii=False, indent=2)
 
-# ── 顏色主題 ──────────────────────────────────
-BG       = "#0f0f14"
-BG2      = "#1a1a24"
-BG3      = "#22223a"
-ACCENT   = "#00e5ff"
-ACCENT2  = "#7c4dff"
-SUCCESS  = "#00e676"
-DANGER   = "#ff1744"
-TEXT     = "#e8e8f0"
-TEXT2    = "#8888aa"
+# ── 顏色主題（深色 / 淺色）────────────────────
+THEMES = {
+    "dark": {
+        "BG": "#0f0f14", "BG2": "#1a1a24", "BG3": "#22223a",
+        "ACCENT": "#00e5ff", "ACCENT2": "#7c4dff",
+        "SUCCESS": "#00e676", "DANGER": "#ff1744",
+        "TEXT": "#e8e8f0", "TEXT2": "#8888aa",
+        "TEXT_ON_ACCENT": "#e8e8f0",
+    },
+    "light": {
+        "BG": "#f3f4f9", "BG2": "#ffffff", "BG3": "#e6e8f2",
+        "ACCENT": "#0aa8c4", "ACCENT2": "#7c4dff",
+        "SUCCESS": "#1b8a3d", "DANGER": "#e5484d",
+        "TEXT": "#1b1b26", "TEXT2": "#5c5c74",
+        "TEXT_ON_ACCENT": "#ffffff",
+    },
+}
+
+BG = BG2 = BG3 = ACCENT = ACCENT2 = SUCCESS = DANGER = TEXT = TEXT2 = TEXT_ON_ACCENT = None
+
+def apply_theme(name):
+    global BG, BG2, BG3, ACCENT, ACCENT2, SUCCESS, DANGER, TEXT, TEXT2, TEXT_ON_ACCENT
+    t = THEMES[name]
+    BG, BG2, BG3 = t["BG"], t["BG2"], t["BG3"]
+    ACCENT, ACCENT2 = t["ACCENT"], t["ACCENT2"]
+    SUCCESS, DANGER = t["SUCCESS"], t["DANGER"]
+    TEXT, TEXT2 = t["TEXT"], t["TEXT2"]
+    TEXT_ON_ACCENT = t["TEXT_ON_ACCENT"]
+
+apply_theme("dark")
 # ─────────────────────────────────────────────
 
 WIDE_LAYOUT_BREAKPOINT = 1000
+ROUTE_TABLE_MAX_ROWS = 15
 
 DEFAULT_ROUTE = [
     (24.1368, 120.6862, "台中火車站"),
@@ -88,35 +109,99 @@ class GPSApp(tk.Tk):
         self.mode = tk.StringVar(value="route")
         self.favorites = load_favorites()
         self._layout_wide = None
+        self.theme_name = "dark"
 
         self._build_scroll_container()
         self._build_ui()
         self._apply_responsive_layout(1500)
+        # 先讓視窗以一般大小完成第一次繪製，再最大化：一方面避免最大化動畫途中
+        # 內容尚未畫出而露出空白背景，另一方面在真正變成最大化尺寸後，強制把
+        # scrollregion 與捲動位置重新校正到最上方，避免出現「明明沒往下捲，
+        # 卻可以往上捲出空白」的殘留捲動位移。
+        self.after(10, self._maximize_and_reset_scroll)
+
+    def _maximize_and_reset_scroll(self):
+        self.state("zoomed")
+        self.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.yview_moveto(0)
+        self._update_scrollbar_visibility()
+        self._update_log_height()
+        if hasattr(self, "route_container"):
+            self._update_route_table_height()
+
+    def _content_fits(self, target_canvas=None):
+        target_canvas = target_canvas or self.canvas
+        bbox = target_canvas.bbox("all")
+        content_h = (bbox[3] - bbox[1]) if bbox else 0
+        return content_h <= target_canvas.winfo_height()
+
+    def _update_scrollbar_visibility(self):
+        if self._content_fits():
+            if self.scrollbar.winfo_ismapped():
+                self.scrollbar.pack_forget()
+        else:
+            if not self.scrollbar.winfo_ismapped():
+                self.scrollbar.pack(side="right", fill="y")
+
+    def _widget_is_descendant(self, widget, ancestor):
+        w = widget
+        while w is not None:
+            if w == ancestor:
+                return True
+            w = getattr(w, "master", None)
+        return False
+
+    def _scroll_canvas(self, target_canvas, event):
+        if self._content_fits(target_canvas):
+            return
+        target_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        top, bottom = target_canvas.yview()
+        if top < 0:
+            target_canvas.yview_moveto(0)
+        elif bottom > 1:
+            target_canvas.yview_moveto(1 - (bottom - top))
+
+    def _update_log_height(self, window_height=None):
+        if not hasattr(self, "log_frame"):
+            return
+        if window_height is None:
+            window_height = self.container.winfo_height()
+        self.log_frame.configure(height=max(80, int(window_height * 0.4)))
 
     def _build_scroll_container(self):
-        container = tk.Frame(self, bg=BG)
-        container.pack(fill="both", expand=True)
+        self.container = tk.Frame(self, bg=BG)
+        self.container.pack(fill="both", expand=True)
+        self.container.bind("<Configure>", lambda e: self._update_log_height(e.height))
 
-        canvas = tk.Canvas(container, bg=BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas = tk.Canvas(self.container, bg=BG, highlightthickness=0)
+        self.canvas = canvas
+        self.scrollbar = ttk.Scrollbar(self.container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=self.scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # 捲軸是否顯示由 _update_scrollbar_visibility() 依內容高度動態決定，
+        # 這裡先不 pack。
 
         self.scroll_frame = tk.Frame(canvas, bg=BG)
         frame_id = canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
 
         def _on_frame_configure(event):
             canvas.configure(scrollregion=canvas.bbox("all"))
+            self._update_scrollbar_visibility()
         self.scroll_frame.bind("<Configure>", _on_frame_configure)
 
         def _on_canvas_configure(event):
             canvas.itemconfig(frame_id, width=event.width)
             self._apply_responsive_layout(event.width)
+            self._update_scrollbar_visibility()
         canvas.bind("<Configure>", _on_canvas_configure)
 
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if hasattr(self, "route_container") and hasattr(self, "route_canvas") and \
+                    self._widget_is_descendant(event.widget, self.route_container):
+                self._scroll_canvas(self.route_canvas, event)
+            else:
+                self._scroll_canvas(canvas, event)
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
     def _apply_responsive_layout(self, width):
@@ -135,6 +220,39 @@ class GPSApp(tk.Tk):
             self.left_col.grid(row=0, column=0, columnspan=2, sticky="ew", padx=24)
             self.right_col.grid(row=1, column=0, columnspan=2, sticky="ew", padx=24)
 
+    def _theme_btn_text(self):
+        return "☀  切換淺色" if self.theme_name == "dark" else "🌙  切換深色"
+
+    def _toggle_theme(self):
+        pin_lat_val = self.pin_lat.get()
+        pin_lon_val = self.pin_lon.get()
+        speed_val = self.speed_var.get()
+        loop_val = self.loop_var.get()
+        mode_val = self.mode.get()
+
+        self.theme_name = "light" if self.theme_name == "dark" else "dark"
+        apply_theme(self.theme_name)
+
+        self.configure(bg=BG)
+        self.container.destroy()
+        self._layout_wide = None
+        self._build_scroll_container()
+        self._build_ui()
+
+        self.pin_lat.set(pin_lat_val)
+        self.pin_lon.set(pin_lon_val)
+        self.speed_var.set(speed_val)
+        self.loop_var.set(loop_val)
+        self._switch_mode(mode_val)
+        self._update_info()
+
+        self.update_idletasks()
+        self._apply_responsive_layout(self.winfo_width())
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.yview_moveto(0)
+        self._update_scrollbar_visibility()
+        self._update_route_table_height()
+
     def _build_ui(self):
         # ── 標題 ──
         title_frame = tk.Frame(self.scroll_frame, bg=BG, pady=20)
@@ -148,6 +266,13 @@ class GPSApp(tk.Tk):
                  font=("Segoe UI", 20, "bold"), bg=BG, fg=TEXT).pack(anchor="w")
         tk.Label(title_col, text="iPhone iOS 17/18+  ·  需先執行 tunneld",
                  font=("Segoe UI", 10), bg=BG, fg=TEXT2).pack(anchor="w")
+
+        self.theme_btn = tk.Button(title_frame, text=self._theme_btn_text(),
+                                    font=("Segoe UI", 10, "bold"),
+                                    bg=BG3, fg=TEXT, relief="flat",
+                                    padx=14, pady=8, cursor="hand2",
+                                    command=self._toggle_theme)
+        self.theme_btn.pack(side="right", padx=(0, 4))
 
         # ── 內容分欄（>1000px 寬時左右並排且等寬，否則上下堆疊）──
         columns_frame = tk.Frame(self.scroll_frame, bg=BG)
@@ -171,7 +296,7 @@ class GPSApp(tk.Tk):
 
         self.stop_btn = tk.Button(btn_frame, text="⏹  停止",
                                   font=("Segoe UI", 13, "bold"),
-                                  bg=DANGER, fg=TEXT, relief="flat",
+                                  bg=DANGER, fg=TEXT_ON_ACCENT, relief="flat",
                                   padx=30, pady=12, cursor="hand2",
                                   state="disabled",
                                   command=self._stop)
@@ -194,16 +319,20 @@ class GPSApp(tk.Tk):
                                        font=("Segoe UI", 10), bg=BG, fg=TEXT2)
         self.progress_label.pack()
 
-        # ── 日誌（左欄）──
+        # ── 日誌（左欄，高度固定為視窗高度的 40%）──
         tk.Label(self.left_col, text="執行日誌", font=("Segoe UI", 10, "bold"),
                  bg=BG, fg=TEXT2).pack(anchor="w", pady=(12, 2))
-        self.log = scrolledtext.ScrolledText(self.left_col, height=8,
+        self.log_frame = tk.Frame(self.left_col, bg=BG)
+        self.log_frame.pack(fill="x", pady=(0, 20))
+        self.log_frame.pack_propagate(False)
+        self.log = scrolledtext.ScrolledText(self.log_frame,
                                               font=("Consolas", 9),
                                               bg=BG2, fg=TEXT2,
                                               insertbackground=ACCENT,
                                               relief="flat", bd=0,
                                               state="disabled")
-        self.log.pack(fill="x", pady=(0, 20))
+        self.log.pack(fill="both", expand=True)
+        self._update_log_height()
 
         # ── 最愛地點面板（左欄）──
         self.fav_frame = tk.Frame(self.left_col, bg=BG2, padx=20, pady=14)
@@ -216,7 +345,7 @@ class GPSApp(tk.Tk):
 
         # 儲存目前定位按鈕
         save_pin_btn = tk.Button(fav_title_row, text="＋ 儲存目前座標",
-                                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT,
+                                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT,
                                   relief="flat", padx=10, pady=4, cursor="hand2",
                                   command=self._save_current_pin_as_fav)
         save_pin_btn.pack(side="right", padx=(4, 0))
@@ -300,7 +429,7 @@ class GPSApp(tk.Tk):
                                 self.pin_lon.set(str(lo))
                             ))
             btn.pack(side="left", padx=4)
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT))
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT_ON_ACCENT))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
 
         # ── 速度設定 ──
@@ -324,7 +453,7 @@ class GPSApp(tk.Tk):
                             padx=10, pady=5, cursor="hand2",
                             command=lambda v=val: self._set_speed(v))
             btn.pack(side="left", padx=4)
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT))
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT_ON_ACCENT))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
 
         speed_row = tk.Frame(speed_frame, bg=BG2)
@@ -353,9 +482,13 @@ class GPSApp(tk.Tk):
         tk.Label(route_label_frame, text="路線座標點",
                  font=("Segoe UI", 11, "bold"), bg=BG, fg=TEXT).pack(side="left")
         tk.Button(route_label_frame, text="＋ 新增點",
-                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT,
+                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT,
                   relief="flat", padx=10, pady=3, cursor="hand2",
                   command=self._add_point).pack(side="right")
+        # 距離/時間資訊：與「＋ 新增點」同一列
+        self.info_label = tk.Label(route_label_frame, text="",
+                                   font=("Segoe UI", 10), bg=BG, fg=TEXT2)
+        self.info_label.pack(side="left", padx=(16, 0))
 
         # 路線表格
         cols_frame = tk.Frame(self.route_section, bg=BG3)
@@ -365,14 +498,29 @@ class GPSApp(tk.Tk):
                      bg=BG3, fg=TEXT2, width=w, anchor="w",
                      padx=6, pady=4).pack(side="left")
 
-        self.route_container = tk.Frame(self.route_section, bg=BG2)
-        self.route_container.pack(fill="x", padx=0)
-        self._refresh_route_rows()
+        # 表格內容區：用一個小型 canvas 包住，最多顯示 ROUTE_TABLE_MAX_ROWS 列，
+        # 超過時才出現右側捲軸（同樣依內容自動顯示/隱藏）。
+        route_table_wrap = tk.Frame(self.route_section, bg=BG2)
+        route_table_wrap.pack(fill="x", padx=0)
 
-        # 距離/時間資訊
-        self.info_label = tk.Label(self.right_col, text="",
-                                   font=("Segoe UI", 10), bg=BG, fg=TEXT2)
-        self.info_label.pack(pady=6)
+        self.route_canvas = tk.Canvas(route_table_wrap, bg=BG2, highlightthickness=0)
+        self.route_scrollbar = ttk.Scrollbar(route_table_wrap, orient="vertical",
+                                              command=self.route_canvas.yview)
+        self.route_canvas.configure(yscrollcommand=self.route_scrollbar.set)
+        self.route_canvas.pack(side="left", fill="both", expand=True)
+
+        self.route_container = tk.Frame(self.route_canvas, bg=BG2)
+        route_frame_id = self.route_canvas.create_window((0, 0), window=self.route_container, anchor="nw")
+
+        def _on_route_frame_configure(event):
+            self.route_canvas.configure(scrollregion=self.route_canvas.bbox("all"))
+        self.route_container.bind("<Configure>", _on_route_frame_configure)
+
+        def _on_route_canvas_configure(event):
+            self.route_canvas.itemconfig(route_frame_id, width=event.width)
+        self.route_canvas.bind("<Configure>", _on_route_canvas_configure)
+
+        self._refresh_route_rows()
         self._update_info()
 
     def _switch_mode(self, mode):
@@ -383,14 +531,12 @@ class GPSApp(tk.Tk):
             self.pin_frame.pack_forget()
             self.speed_frame_ref.pack(fill="x", pady=(0, 12))
             self.route_section.pack(fill="x", padx=0)
-            self.info_label.pack(pady=6)
             self.start_btn.config(text="▶  開始模擬")
         else:
-            self.pin_mode_btn.config(bg=ACCENT2, fg=TEXT)
+            self.pin_mode_btn.config(bg=ACCENT2, fg=TEXT_ON_ACCENT)
             self.route_mode_btn.config(bg=BG3, fg=TEXT2)
             self.speed_frame_ref.pack_forget()
             self.route_section.pack_forget()
-            self.info_label.pack_forget()
             self.pin_frame.pack(fill="x", pady=(0, 8))
             self.start_btn.config(text="📌  固定定位")
 
@@ -518,6 +664,24 @@ class GPSApp(tk.Tk):
                       bg=row["bg"], fg=DANGER, relief="flat",
                       cursor="hand2", width=3,
                       command=lambda i=i: self._del_point(i)).pack(side="left")
+        self._update_route_table_height()
+
+    def _update_route_table_height(self):
+        rows = self.route_container.winfo_children()
+        if not rows:
+            return
+        self.update_idletasks()
+        row_h = rows[0].winfo_reqheight()
+        visible_rows = min(len(rows), ROUTE_TABLE_MAX_ROWS)
+        self.route_canvas.configure(height=row_h * visible_rows)
+        self.route_canvas.configure(scrollregion=self.route_canvas.bbox("all"))
+        self.update_idletasks()
+        if self._content_fits(self.route_canvas):
+            if self.route_scrollbar.winfo_ismapped():
+                self.route_scrollbar.pack_forget()
+        else:
+            if not self.route_scrollbar.winfo_ismapped():
+                self.route_scrollbar.pack(side="right", fill="y")
 
     def _on_edit(self, i, field, var):
         try:
