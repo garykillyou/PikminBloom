@@ -197,9 +197,12 @@ class GPSApp(tk.Tk):
         self.resizable(True, True)
         self.minsize(560, 360)
 
-        self.running = False
-        self.stop_event = threading.Event()
-        self.sim_thread = None
+        # 定位模擬連線是「長連線」：只要連上裝置，就算按停止／返回也不會斷線，
+        # 只有明確按「恢復真實定位」才會真的中斷連線（中斷當下裝置會自動恢復真實 GPS）。
+        self.session_thread = None
+        self.session_active = False
+        self.pending_action = "pause"  # "forward" | "reverse" | "pause" | "disconnect"
+        self.point_idx = 0
         self.route = [list(r) for r in DEFAULT_ROUTE]
         self.mode = tk.StringVar(value="route")
         self.favorites = load_favorites()
@@ -390,6 +393,7 @@ class GPSApp(tk.Tk):
         btn_frame.pack(fill="x")
         btn_frame.columnconfigure(0, weight=1, uniform="ctrl_btns")
         btn_frame.columnconfigure(1, weight=1, uniform="ctrl_btns")
+        btn_frame.columnconfigure(2, weight=1, uniform="ctrl_btns")
 
         self.start_btn = tk.Button(btn_frame, text="▶  開始模擬",
                                    font=("Segoe UI", 13, "bold"),
@@ -398,13 +402,31 @@ class GPSApp(tk.Tk):
                                    command=self._start)
         self.start_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
+        self.return_btn = tk.Button(btn_frame, text="↩  返回",
+                                    font=("Segoe UI", 13, "bold"),
+                                    bg=BG3, fg=TEXT, relief="flat",
+                                    padx=30, pady=12, cursor="hand2",
+                                    state="disabled",
+                                    command=self._reverse)
+        self.return_btn.grid(row=0, column=1, sticky="ew", padx=4)
+
         self.stop_btn = tk.Button(btn_frame, text="⏹  停止",
                                   font=("Segoe UI", 13, "bold"),
                                   bg=DANGER, fg=TEXT_ON_ACCENT, relief="flat",
                                   padx=30, pady=12, cursor="hand2",
                                   state="disabled",
                                   command=self._stop)
-        self.stop_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.stop_btn.grid(row=0, column=2, sticky="ew", padx=(4, 0))
+
+        # ── 恢復真實定位（獨立按鈕，與開始/返回/停止的流程無關）──
+        restore_frame = tk.Frame(self.left_col, bg=BG)
+        restore_frame.pack(fill="x", pady=(0, 4))
+        self.restore_btn = tk.Button(restore_frame, text="🛰  恢復真實定位",
+                                     font=("Segoe UI", 10, "bold"),
+                                     bg=BG3, fg=TEXT2, relief="flat",
+                                     padx=20, pady=8, cursor="hand2",
+                                     command=self._restore_real_location)
+        self.restore_btn.pack(fill="x")
 
         # ── 進度條（左欄）──
         self.progress_var = tk.DoubleVar(value=0)
@@ -638,6 +660,7 @@ class GPSApp(tk.Tk):
 
         self._refresh_route_rows()
         self._update_info()
+        self._update_return_btn_state()
 
     def _switch_mode(self, mode):
         self.mode.set(mode)
@@ -655,6 +678,10 @@ class GPSApp(tk.Tk):
             self.route_section.pack_forget()
             self.pin_frame.pack(fill="x", pady=(0, 8))
             self.start_btn.config(text="📌  固定定位")
+        self._update_return_btn_state()
+
+    def _update_return_btn_state(self):
+        self.return_btn.config(state="normal" if self.mode.get() == "route" else "disabled")
 
     def _refresh_fav_list(self):
         for w in self.fav_list_frame.winfo_children():
@@ -769,6 +796,7 @@ class GPSApp(tk.Tk):
         else:
             self._switch_mode("route")
             self.route = [[r[0], r[1], r[2]] for r in fav["route"]]
+            self.point_idx = 0
             self._refresh_route_rows()
             self._update_info()
             self._log("⭐ 載入路線：" + fav["name"])
@@ -853,6 +881,7 @@ class GPSApp(tk.Tk):
         if not messagebox.askyesno("確認清空", "確定要清空所有路線座標點嗎？"):
             return
         self.route = []
+        self.point_idx = 0
         self.info_label.config(text="")
         self._refresh_route_rows()
         self._update_info()
@@ -893,39 +922,80 @@ class GPSApp(tk.Tk):
             except ValueError:
                 messagebox.showerror("錯誤", "請輸入有效的緯度/經度數值")
                 return
-        self.running = True
-        self.stop_event.clear()
+        self.pending_action = "forward"
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
-        self.progress_var.set(0)
+        self.restore_btn.config(state="disabled")
+        self._update_return_btn_state()
         if self.mode.get() == "pin":
             self._log("📌 固定定位模式啟動...")
         else:
             self._log("▶  開始模擬...")
-        self.sim_thread = threading.Thread(target=self._run_async, daemon=True)
-        self.sim_thread.start()
+        self._ensure_session_thread()
 
     def _stop(self):
-        self.stop_event.set()
+        self.pending_action = "pause"
         self._log("⏹  停止中...")
 
-    def _run_async(self):
+    def _reverse(self):
+        if self.mode.get() != "route":
+            return
+        if len(self.route) < 2:
+            messagebox.showerror("錯誤", "請至少設定 2 個路線點")
+            return
+        self.pending_action = "reverse"
+        self.start_btn.config(state="disabled")
+        self.stop_btn.config(state="normal")
+        self.return_btn.config(state="disabled")
+        self.restore_btn.config(state="disabled")
+        self._log("↩  返回：從目前座標往回走...")
+        self._ensure_session_thread()
+
+    def _restore_real_location(self):
+        if not self.session_active:
+            messagebox.showinfo("提示", "目前尚未連線模擬，已經是真實定位")
+            return
+        if self.pending_action in ("forward", "reverse"):
+            messagebox.showwarning("警告", "請先按「停止」，再恢復真實定位")
+            return
+        self.pending_action = "disconnect"
+        self.restore_btn.config(state="disabled")
+        self.start_btn.config(state="disabled")
+        self.stop_btn.config(state="disabled")
+        self.return_btn.config(state="disabled")
+        self._log("🛰  恢復真實定位中...")
+
+    def _ensure_session_thread(self):
+        if self.session_thread and self.session_thread.is_alive():
+            return
+        self.session_thread = threading.Thread(target=self._run_session, daemon=True)
+        self.session_thread.start()
+
+    def _run_session(self):
         try:
-            if self.mode.get() == "pin":
-                asyncio.run(self._simulate_pin())
-            else:
-                asyncio.run(self._simulate())
+            asyncio.run(self._session_main())
         except Exception as e:
             self.after(0, self._log, "❌ 錯誤：" + str(e))
         finally:
-            self.after(0, self._on_done)
+            self.after(0, self._on_session_ended)
 
-    def _on_done(self):
-        self.running = False
+    def _on_session_ended(self):
+        self.session_active = False
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
+        self.restore_btn.config(state="normal")
+        self._update_return_btn_state()
 
-    async def _simulate(self):
+    def _on_paused(self):
+        self.start_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
+        self.restore_btn.config(state="normal")
+        self._update_return_btn_state()
+
+    async def _session_main(self):
+        """維持一條長連線：開始/返回/停止都只是換動作，不會中斷連線；
+        只有拿到 "disconnect" 動作（按下「恢復真實定位」）才會真正斷線，
+        斷線當下裝置會自動恢復真實 GPS。"""
         try:
             from pymobiledevice3.tunneld.api import get_tunneld_devices
             from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
@@ -939,7 +1009,7 @@ class GPSApp(tk.Tk):
             rsds = await get_tunneld_devices()
         except Exception as e:
             self.after(0, self._log, "❌ tunneld 連線失敗：" + str(e))
-            self.after(0, self._log, "   請先以系統管理員執行：pymobiledevice3 remote tunneld")
+            self.after(0, self._log, "   請先以系統管理員執行：python -m pymobiledevice3 remote tunneld")
             return
 
         if not rsds:
@@ -949,80 +1019,90 @@ class GPSApp(tk.Tk):
         rsd = rsds[0]
         self.after(0, self._log, "✅ 找到裝置：" + str(rsd.udid))
 
-        speed = self.speed_var.get()
-        loop = self.loop_var.get()
-        route = [(r[0], r[1]) for r in self.route]
-        points = interpolate_points([(r[0], r[1], "") for r in self.route], speed, 1.0)
-        total = len(points)
-
         async with DvtProvider(rsd) as dvt, LocationSimulation(dvt) as sim:
-            iteration = 0
-            while not self.stop_event.is_set():
-                iteration += 1
-                if loop and iteration > 1:
-                    self.after(0, self._log, "🔁 第 " + str(iteration) + " 次循環")
-
-                for idx, (lat, lon) in enumerate(points):
-                    if self.stop_event.is_set():
-                        break
-                    await sim.set(lat, lon)
-                    progress = (idx + 1) / total * 100
-                    self.after(0, self.progress_var.set, progress)
-                    self.after(0, self.progress_label.config,
-                               {"text": f"{progress:.1f}%  📍 {lat:.6f}, {lon:.6f}"})
-                    await asyncio.sleep(1.0)
-
-                if not loop or self.stop_event.is_set():
+            self.session_active = True
+            while True:
+                action = self.pending_action
+                if action == "disconnect":
                     break
+                elif action == "forward" and self.mode.get() == "pin":
+                    await self._walk_pin(sim)
+                elif action == "forward":
+                    await self._walk_route(sim, 1)
+                elif action == "reverse":
+                    await self._walk_route(sim, -1)
+                else:
+                    await asyncio.sleep(0.2)
+                    continue
+                if self.pending_action == "pause":
+                    self.after(0, self._on_paused)
 
-            self.after(0, self._log, "⏹  恢復真實定位...")
             await sim.clear()
-            self.after(0, self._log, "✅ 完成！")
-            self.after(0, self.progress_label.config, {"text": "已完成"})
+            self.point_idx = 0
+            self.after(0, self._log, "✅ 已恢復真實定位")
+            self.after(0, self.progress_var.set, 0)
+            self.after(0, self.progress_label.config, {"text": "已恢復真實定位"})
 
-
-    async def _simulate_pin(self):
-        try:
-            from pymobiledevice3.tunneld.api import get_tunneld_devices
-            from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
-            from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
-        except ImportError as e:
-            self.after(0, self._log, "❌ 匯入失敗：" + str(e))
-            return
-
-        self.after(0, self._log, "🔍 搜尋裝置中...")
-        try:
-            rsds = await get_tunneld_devices()
-        except Exception as e:
-            self.after(0, self._log, "❌ tunneld 連線失敗：" + str(e))
-            self.after(0, self._log, "   請先以系統管理員執行：pymobiledevice3 remote tunneld")
-            return
-
-        if not rsds:
-            self.after(0, self._log, "❌ 找不到裝置，請確認 USB 已連接")
-            return
-
-        rsd = rsds[0]
+    async def _walk_pin(self, sim):
         lat = float(self.pin_lat.get())
         lon = float(self.pin_lon.get())
-        self.after(0, self._log, "✅ 找到裝置：" + str(rsd.udid))
         self.after(0, self._log, f"📌 固定位置：{lat:.6f}, {lon:.6f}")
+        await sim.set(lat, lon)
+        self.after(0, self.progress_var.set, 100)
+        self.after(0, self.progress_label.config,
+                   {"text": f"📌 固定中  {lat:.6f}, {lon:.6f}"})
+        self.after(0, self._log, "✅ 定位已固定！按「停止」可保持在目前座標")
+        self.pending_action = "pause"
 
-        async with DvtProvider(rsd) as dvt, LocationSimulation(dvt) as sim:
-            await sim.set(lat, lon)
-            self.after(0, self.progress_var.set, 100)
-            self.after(0, self.progress_label.config,
-                       {"text": f"📌 固定中  {lat:.6f}, {lon:.6f}"})
-            self.after(0, self._log, "✅ 定位已固定！按「停止」可恢復真實定位")
+    async def _walk_route(self, sim, direction):
+        """direction=1 往路線終點走，direction=-1 往路線起點走回去。
+        走到一半若 self.pending_action 被改成別的值（暫停/切換方向/斷線），
+        會立刻中斷並把目前位置留在 self.point_idx，交回外層迴圈處理。"""
+        action_name = "forward" if direction == 1 else "reverse"
+        suffix = "" if direction == 1 else "（返回中）"
+        loop_mode = self.loop_var.get() if direction == 1 else False
+        if direction == -1:
+            self.after(0, self._log, "↩  返回中，沿路線往回走...")
 
-            # 保持定位直到按停止
-            while not self.stop_event.is_set():
-                await asyncio.sleep(0.5)
+        idx = self.point_idx
+        while True:
+            speed = self.speed_var.get()
+            points = interpolate_points([(r[0], r[1], "") for r in self.route], speed, 1.0)
+            total = len(points)
+            idx = max(0, min(idx, total - 1))
+            idx_range = range(idx, total) if direction == 1 else range(idx, -1, -1)
 
-            self.after(0, self._log, "⏹  恢復真實定位...")
-            await sim.clear()
-            self.after(0, self._log, "✅ 已恢復真實定位")
-            self.after(0, self.progress_label.config, {"text": "已停止"})
+            interrupted = False
+            for i in idx_range:
+                if self.pending_action != action_name:
+                    interrupted = True
+                    break
+                lat, lon = points[i]
+                await sim.set(lat, lon)
+                idx = i
+                self.point_idx = i
+                progress = (i + 1) / total * 100 if direction == 1 else i / total * 100
+                self.after(0, self.progress_var.set, progress)
+                self.after(0, self.progress_label.config,
+                           {"text": f"{progress:.1f}%  📍 {lat:.6f}, {lon:.6f}{suffix}"})
+                await asyncio.sleep(1.0)
+
+            if interrupted:
+                return
+
+            if direction == 1 and loop_mode and self.pending_action == "forward":
+                self.after(0, self._log, "🔁 循環模式：回到起點重新出發")
+                idx = 0
+                self.point_idx = 0
+                continue
+
+            if direction == 1:
+                self.after(0, self._log, "✅ 完成！保持於目前座標")
+            else:
+                self.after(0, self._log, "✅ 已返回起點，保持於目前座標")
+            self.after(0, self.progress_label.config, {"text": "已完成"})
+            self.pending_action = "pause"
+            return
 
 
 if __name__ == "__main__":

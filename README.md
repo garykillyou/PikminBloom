@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
-![iOS](https://img.shields.io/badge/iOS-17%2B-black?logo=apple)
+![iOS](https://img.shields.io/badge/ios-26-black?logo=apple)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
@@ -26,9 +26,9 @@
 
 | 項目 | 需求 |
 |------|------|
-| 作業系統 | Windows 10 / 11 |
+| 作業系統 | Windows 11 |
 | Python | 3.11 64-bit 以上 |
-| iPhone | iOS 17 / 18 / 26+ |
+| iPhone | iOS 26 |
 | 連線方式 | USB（不需 iTunes） |
 
 ---
@@ -65,7 +65,7 @@ pip install -r requirements.txt
 以**系統管理員**開啟命令提示字元：
 
 ```bash
-pymobiledevice3 remote tunneld
+python -m pymobiledevice3 remote tunneld
 ```
 
 等到出現以下訊息後保持視窗開著：
