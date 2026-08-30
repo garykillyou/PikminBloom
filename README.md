@@ -1,6 +1,6 @@
 # 📍 iPhone GPS 路線模擬器
 
-> 免費、免越獄、免 iTunes，在 Windows 上模擬 iPhone GPS 定位的桌面工具。支援 iOS 17 / 18 / 26+。
+> 免費、免越獄、免 iTunes，在 Windows 上模擬 iPhone GPS 定位的桌面工具。支援 iOS 26。
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
@@ -17,6 +17,7 @@
 - 📥 **KML 路線匯入** — 直接匯入 Google Earth / Google 地圖匯出的 KML 檔案，自動轉成路線最愛
 - 🚶 **速度調整** — 支援步行、慢跑、騎車、開車等速度預設
 - 🔄 **循環模式** — 路線走完自動從頭再走
+- ↩ **返回功能** — 路線模式可從目前位置原地折返回起點，連線全程保持不中斷
 - 📊 **即時進度** — 顯示目前座標與完成百分比
 - 🌓 **深色 / 淺色主題** — 一鍵切換，偏好會自動記住
 
@@ -90,14 +91,17 @@ python gps_app.py
 ### 路線移動模式
 1. 在座標表格中輸入路線點（緯度、經度、備註）
 2. 選擇移動速度
-3. 按「▶ 開始模擬」
-4. 按「⏹ 停止」恢復真實定位
+3. 按「▶ 開始模擬」沿路線往終點走
+4. 按「⏹ 停止」暫停在目前座標（連線保持，不會恢復真實定位）
+5. 按「↩ 返回」從目前座標沿路線往回走到起點
+6. 按「🛰 恢復真實定位」才會真正斷線，iPhone 恢復真實 GPS
 
 ### 固定定位模式
 1. 切換到「📌 固定定位」模式
 2. 輸入緯度/經度，或使用快速選擇
-3. 按「📌 固定定位」
-4. 按「⏹ 停止」恢復真實定位
+3. 按「📌 固定定位」釘住座標
+4. 按「⏹ 停止」保持在目前座標（連線保持，不會恢復真實定位）
+5. 按「🛰 恢復真實定位」才會真正斷線，iPhone 恢復真實 GPS
 
 ### 最愛地點
 - 點「＋ 儲存目前路線」或「＋ 儲存目前座標」儲存
@@ -137,7 +141,7 @@ PikminBloom/
 
 本專案使用 [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) 與 iPhone 通訊。
 
-iOS 17+ 需透過 RemoteXPC tunnel 連線，因此需要先啟動 `tunneld` 服務建立加密通道，再透過 DVT（Developer Tools）的 `LocationSimulation` 服務注入模擬座標。
+iOS 26 需透過 RemoteXPC tunnel 連線，因此需要先啟動 `tunneld` 服務建立加密通道，再透過 DVT（Developer Tools）的 `LocationSimulation` 服務注入模擬座標。
 
 ---
 

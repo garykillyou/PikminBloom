@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-單一檔案 Python/Tkinter 桌面工具，透過 `pymobiledevice3` 模擬 iPhone（iOS 17+）的 GPS 定位，
+單一檔案 Python/Tkinter 桌面工具，透過 `pymobiledevice3` 模擬 iPhone（iOS 26）的 GPS 定位，
 免越獄、免 iTunes，僅需 USB 連線。整個應用程式邏輯都在 [gps_app.py](gps_app.py) 一個檔案中，
 沒有其他模組、套件或子目錄。執行期間會在同目錄產生兩個 JSON 狀態檔：`gps_favorites.json`
 （最愛地點/路線）與 `gps_settings.json`（目前僅存主題偏好）。
@@ -15,8 +15,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 安裝相依套件
 pip install -r requirements.txt
 
-# 執行前，需先在「系統管理員」的終端機啟動 tunneld（建立 iOS 17+ 的 RemoteXPC 加密通道）
-pymobiledevice3 remote tunneld
+# 執行前，需先在「系統管理員」的終端機啟動 tunneld（建立 iOS 26 的 RemoteXPC 加密通道）
+python -m pymobiledevice3 remote tunneld
 
 # 另開一般終端機執行 App
 python gps_app.py
@@ -28,21 +28,21 @@ python gps_app.py
 
 ## 架構重點
 
-### 執行流程（連接 iPhone 的關鍵鏈路）
-1. `tunneld` 必須以系統管理員權限先啟動，建立 iOS 17+ 的 RemoteXPC 通道。
-2. App 啟動後，透過 `pymobiledevice3.tunneld.api.get_tunneld_devices()` 找到裝置（取第一台，`rsds[0]`）。
-3. 用 `DvtProvider(rsd)` 開啟 DVT（Developer Tools）連線，再用 `LocationSimulation(dvt)` 取得定位模擬服務。
-4. `sim.set(lat, lon)` 注入座標；停止時呼叫 `sim.clear()` 恢復真實 GPS 定位。
-5. 這段邏輯分別實作在 `GPSApp._simulate()`（路線模式）與 `_simulate_pin()`（固定定位模式）中，兩者高度相似但各自獨立，修改其中一個時要留意另一個是否也需要同步修改。
+### 執行流程（連接 iPhone 的關鍵鏈路，長連線架構）
+1. `tunneld` 必須以系統管理員權限先啟動（`python -m pymobiledevice3 remote tunneld`），建立 iOS 26 的 RemoteXPC 通道。
+2. 按「開始模擬」後，`_ensure_session_thread()` 只會在沒有存活中的 `self.session_thread` 時才另開一條長駐背景執行緒執行 `_run_session()`（`asyncio.run(self._session_main())`）；後續按「停止」「返回」都**不會**重開執行緒或重新連線，只是改變 `self.pending_action` 這個共享狀態（`"forward" | "reverse" | "pause" | "disconnect"`），由 `_session_main()` 內的 while 迴圈讀取並分派動作。
+3. `_session_main()` 用 `async with DvtProvider(rsd) as dvt, LocationSimulation(dvt) as sim:` 開一次連線後就常駐在 while 迴圈裡，直到 `pending_action == "disconnect"`（使用者按「恢復真實定位」）才 `break` 出迴圈、呼叫 `sim.clear()` 並讓 `async with` 關閉連線——恢復真實 GPS 只會在明確斷線時發生，單純停止/返回都仍保持模擬連線在目前座標。
+4. 座標注入本身仍是 `sim.set(lat, lon)`，只是呼叫位置搬到 `_walk_route()` / `_walk_pin()` 這兩個由 `_session_main()` 依 `pending_action` 呼叫的協程裡。
 
-### 兩種模式（由 `self.mode` StringVar 控制）
-- **路線模式（route）**：多個座標點依序移動。`interpolate_points()` 會依照 `haversine()` 算出的距離與設定速度（m/s），把每段路線切成每秒一個內插點，逐點呼叫 `sim.set()` 並 `asyncio.sleep(1.0)`。支援 `loop_var` 循環模式（跑完從頭再來）。
-- **固定定位模式（pin）**：呼叫一次 `sim.set(lat, lon)` 後，用 `while not self.stop_event.is_set(): await asyncio.sleep(0.5)` 持續保持定位，直到使用者按停止。
+### 兩種模式（由 `self.mode` StringVar 控制，動作由 `self.pending_action` 驅動）
+- **路線模式（route）**：`_walk_route(sim, direction)` 中 `direction=1` 往終點走、`direction=-1` 往起點走回去（「返回」功能，由 `_reverse()` 觸發，設定 `pending_action = "reverse"`）。`interpolate_points()` 依 `haversine()` 算出的距離與設定速度（m/s）把路線切成每秒一個內插點；目前走到第幾個內插點記錄在 `self.point_idx`，中斷（停止/切換方向/斷線）時會停在原點，之後從該點繼續。支援 `loop_var` 循環模式（只在 `direction=1` 且未被中斷時生效）。
+- **固定定位模式（pin）**：`_walk_pin(sim)` 呼叫一次 `sim.set(lat, lon)` 後立刻把 `pending_action` 設回 `"pause"`，讓外層 while 迴圈進入 `await asyncio.sleep(0.2)` 的閒置分支，藉此在同一條長連線上「保持」定位，直到使用者按「停止」（其實已經是 pause 狀態，UI 只更新按鈕）或「恢復真實定位」。
 
-### 執行緒與非同步整合
-- 按下「開始模擬」後，UI 主執行緒會另開 `self.sim_thread`（`threading.Thread(daemon=True)`），內部用 `asyncio.run()` 執行 `_simulate()` / `_simulate_pin()`（因為 `pymobiledevice3` 的 DVT/LocationSimulation API 是 async）。
+### 執行緒與非同步整合（長連線 + 狀態機，取代舊版每次都重連的做法）
+- 背景執行緒只在需要時建立一次（見上），此後「開始」「停止」「返回」「恢復真實定位」四個按鈕全部只是寫入 `self.pending_action` 這個跨執行緒共享變數，實際動作都在同一個 `_session_main()` 協程的 while 迴圈裡依序處理，不會重新建立 `DvtProvider`/`LocationSimulation`。
 - 背景執行緒中若要更新 Tkinter UI（進度條、日誌、按鈕狀態），一律要透過 `self.after(0, ...)` 排回主執行緒，不可直接操作 widget。
-- `self.stop_event`（`threading.Event`）是跨執行緒的停止訊號，`_stop()` 只負責 `set()`，實際清理與恢復定位在對應的 `_simulate*()` coroutine 內完成。
+- 按鈕狀態切換靠 `_on_paused()`（暫停/返回中斷後）與 `_on_session_ended()`（`_run_session()` 的 `finally` 區塊，連線真正結束後）兩個 callback 決定要啟用/停用哪些按鈕；`_update_return_btn_state()` 另外控制「返回」按鈕只在路線模式下可用。
+- 新增/修改任何動作（`pending_action` 的新值）時，需同步確認：(a) `_session_main()` 的 if/elif 分派邏輯、(b) 對應的 `_walk_*()` 協程如何在動作被外部改變時中斷並保留 `self.point_idx`、(c) 觸發該動作的按鈕要如何重置其他按鈕狀態。
 
 ### 最愛地點（Favorites）
 - 儲存在執行檔同目錄的 `gps_favorites.json`（`FAVORITES_FILE`），由 `load_favorites()` / `save_favorites()` 讀寫，內容是 list of dict，`type` 欄位為 `"pin"` 或 `"route"`。

@@ -369,7 +369,7 @@ class GPSApp(tk.Tk):
         title_col.pack(side="left", padx=12)
         tk.Label(title_col, text="GPS 路線模擬器",
                  font=("Segoe UI", 20, "bold"), bg=BG, fg=TEXT).pack(anchor="w")
-        tk.Label(title_col, text="iPhone iOS 17/18+  ·  需先執行 tunneld",
+        tk.Label(title_col, text="iPhone iOS 26  ·  需先執行 tunneld",
                  font=("Segoe UI", 10), bg=BG, fg=TEXT2).pack(anchor="w")
 
         self.theme_btn = tk.Button(title_frame, text=self._theme_btn_text(),

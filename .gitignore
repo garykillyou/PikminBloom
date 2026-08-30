@@ -30,3 +30,4 @@ env/
 .DS_Store
 Thumbs.db
 desktop.ini
+open_cmd_as_admin.bat
