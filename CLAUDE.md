@@ -41,7 +41,8 @@ python gps_app.py
 ### 執行緒與非同步整合（長連線 + 狀態機，取代舊版每次都重連的做法）
 - 背景執行緒只在需要時建立一次（見上），此後「開始」「停止」「返回」「恢復真實定位」四個按鈕全部只是寫入 `self.pending_action` 這個跨執行緒共享變數，實際動作都在同一個 `_session_main()` 協程的 while 迴圈裡依序處理，不會重新建立 `DvtProvider`/`LocationSimulation`。
 - 背景執行緒中若要更新 Tkinter UI（進度條、日誌、按鈕狀態），一律要透過 `self.after(0, ...)` 排回主執行緒，不可直接操作 widget。
-- 按鈕狀態切換靠 `_on_paused()`（暫停/返回中斷後）與 `_on_session_ended()`（`_run_session()` 的 `finally` 區塊，連線真正結束後）兩個 callback 決定要啟用/停用哪些按鈕；`_update_return_btn_state()` 另外控制「返回」按鈕只在路線模式下可用。
+- 四顆控制按鈕（開始/返回/停止/恢復真實定位）的狀態統一由 `_sync_btn_states()` 依 `self.pending_action` 與 `self.mode` 推導，不再各自散落 `config(state=...)`；`_on_paused()`（暫停/返回中斷後）與 `_on_session_ended()`（`_run_session()` 的 `finally` 區塊，連線真正結束後）兩個 callback 都只是呼叫它，`_update_return_btn_state()` 另外控制「返回」按鈕只在路線模式且未在返回/斷線中時可用。`_build_ui()` 尾端也會呼叫 `_sync_btn_states()`，所以切換主題整個重建 UI 之後狀態不會退回預設值。
+- 實際切換單一按鈕要走 `_set_btn_enabled(btn, enabled)`，不要直接 `config(state=...)`：tkinter 的 `state="disabled"` 只會換文字色、背景色完全不動，會讓停用中的「停止」仍是滿版 `DANGER` 底而看起來比可按的按鈕更醒目。每顆按鈕「啟用時」的顏色在 `_build_ui()` 建立後登記在 `btn.enabled_bg` / `btn.enabled_fg`，停用時一律換成 `DISABLED_BG` + `DISABLED_TEXT`（透過 `disabledforeground`）。
 - 新增/修改任何動作（`pending_action` 的新值）時，需同步確認：(a) `_session_main()` 的 if/elif 分派邏輯、(b) 對應的 `_walk_*()` 協程如何在動作被外部改變時中斷並保留 `self.point_idx`、(c) 觸發該動作的按鈕要如何重置其他按鈕狀態。
 
 ### 最愛地點（Favorites）
@@ -50,7 +51,7 @@ python gps_app.py
 - 路線最愛除了手動輸入座標（`_save_current_route_as_fav`）外，也可從 KML 檔案匯入（`_import_kml_as_fav` → `parse_kml_route()`）：解析第一條 `LineString` 作為路線座標，並用起訖點附近（約 50 公尺內）的 `Point` 名稱自動當作起訖點備註，其餘中間點備註留空。
 
 ### 主題系統（深色 / 淺色）
-- 兩組色票集中定義在檔案開頭的 `THEMES` dict（`"dark"` / `"light"`），`apply_theme(name)` 會把對應色票寫入模組層級的全域變數（`BG`/`BG2`/`BG3`/`ACCENT`/`ACCENT2`/`SUCCESS`/`DANGER`/`TEXT`/`TEXT2`/`TEXT_ON_ACCENT`），供整份檔案的 UI 建構函式讀取。
+- 兩組色票集中定義在檔案開頭的 `THEMES` dict（`"dark"` / `"light"`），`apply_theme(name)` 會把對應色票寫入模組層級的全域變數（`BG`/`BG2`/`BG3`/`HOVER`/`ACCENT`/`ACCENT2`/`DANGER`/`TEXT`/`TEXT2`/`TEXT_ON_ACCENT`/`TEXT_ON_ACCENT2`），其中 `TEXT_ON_ACCENT` 專用於亮底色（`ACCENT`/`DANGER`）、`TEXT_ON_ACCENT2` 專用於暗底色（`ACCENT2`/`HOVER`），兩者不可互換；另有 `DISABLED_BG`/`DISABLED_TEXT` 專供按鈕停用狀態使用（亮度刻意壓在 `BG3` 之下，讓停用按鈕退到「可按的次要按鈕」之後）。以上全域變數供整份檔案的 UI 建構函式讀取。
 - 目前套用的主題名稱存在 `self.theme_name`，並持久化在 `gps_settings.json`（`load_settings()` / `save_settings()`）；啟動時讀取上次的偏好，找不到或值不合法就 fallback 回 `"dark"`。
 - `_toggle_theme()` 切換主題時，因為顏色是模組全域變數而非 widget 屬性，唯一能讓所有既有 widget 換色的方式是整個銷毀重建：先暫存目前輸入框/勾選狀態，`apply_theme()` 換色後銷毀 `self.container` 並重新呼叫 `_build_scroll_container()` + `_build_ui()`，最後再把暫存的狀態寫回新建立的 widget。新增任何有「使用者輸入中狀態」的欄位時，記得同步加進這段暫存/還原流程，否則切換主題會遺失使用者輸入。
 

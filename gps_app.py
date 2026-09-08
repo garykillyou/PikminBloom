@@ -124,33 +124,56 @@ def save_settings(settings):
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 # ── 顏色主題（深色 / 淺色）────────────────────
+# BG / BG2 / BG3 是三層堆疊背景（主底 → 卡片 → 輸入框／次要按鈕），
+# 相鄰兩層的對比度刻意拉到 1.2 以上，否則深色下看不出層級。
+# HOVER 是次要按鈕的滑入色（比 BG3 更亮，深色介面的 hover 應該變亮而非變暗）。
+# ACCENT 是主要動作色，DANGER 刻意換成橙色系，避免與 ACCENT 同色而分不出
+# 「主要動作」與「破壞性動作」。TEXT_ON_ACCENT 用在亮底色（ACCENT / DANGER）上，
+# TEXT_ON_ACCENT2 用在暗底色（ACCENT2 / HOVER）上，兩者不可互換。
+# DISABLED_BG / DISABLED_TEXT 是按鈕停用狀態：亮度刻意壓在 BG3（可按的次要按鈕）
+# 之下，因為 tkinter 的 state="disabled" 只會換文字色、不會換背景色。
 THEMES = {
     "dark": {
-        "BG": "#1D1616", "BG2": "#2A1F1F", "BG3": "#3D2424",
+        "BG": "#1D1616", "BG2": "#302323", "BG3": "#4E2F2F",
+        "HOVER": "#7E3535",
         "ACCENT": "#D84040", "ACCENT2": "#8E1616",
-        "SUCCESS": "#00e676", "DANGER": "#D84040",
-        "TEXT": "#EEEEEE", "TEXT2": "#A89A9A",
-        "TEXT_ON_ACCENT": "#EEEEEE",
+        "DANGER": "#F0883E",
+        "TEXT": "#EEEEEE", "TEXT2": "#B3A5A5",
+        "TEXT_ON_ACCENT": "#0A0707", "TEXT_ON_ACCENT2": "#EEEEEE",
+        "DISABLED_BG": "#2A2020", "DISABLED_TEXT": "#7A6B6B",
     },
     "light": {
-        "BG": "#EFFFFB", "BG2": "#ffffff", "BG3": "#DCEEE7",
-        "ACCENT": "#4F98CA", "ACCENT2": "#50D890",
-        "SUCCESS": "#50D890", "DANGER": "#e5484d",
+        # BG 比純白的 BG2 深一階，白色卡片才浮得起來；BG3 又比 BG 更深，
+        # 讓次要按鈕/表格底在淺色底上仍看得出輪廓。
+        "BG": "#E3F5EF", "BG2": "#ffffff", "BG3": "#C9E2D9",
+        "HOVER": "#99C0C9",
+        # ACCENT / ACCENT2 / DANGER 都刻意壓深：中亮度色配近白字必然低對比，
+        # 壓深後白字才過 AA，同時在白色卡片上也有足夠輪廓。
+        "ACCENT": "#2A72A3", "ACCENT2": "#27A55F",
+        "DANGER": "#B8242A",
         "TEXT": "#272727", "TEXT2": "#5c5c5c",
-        "TEXT_ON_ACCENT": "#EFFFFB",
+        "TEXT_ON_ACCENT": "#EFFFFB", "TEXT_ON_ACCENT2": "#272727",
+        "DISABLED_BG": "#D2D2D2", "DISABLED_TEXT": "#858585",
     },
 }
 
-BG = BG2 = BG3 = ACCENT = ACCENT2 = SUCCESS = DANGER = TEXT = TEXT2 = TEXT_ON_ACCENT = None
+BG = BG2 = BG3 = HOVER = ACCENT = ACCENT2 = DANGER = None
+TEXT = TEXT2 = TEXT_ON_ACCENT = TEXT_ON_ACCENT2 = None
+DISABLED_BG = DISABLED_TEXT = None
 
 def apply_theme(name):
-    global BG, BG2, BG3, ACCENT, ACCENT2, SUCCESS, DANGER, TEXT, TEXT2, TEXT_ON_ACCENT
+    global BG, BG2, BG3, HOVER, ACCENT, ACCENT2, DANGER
+    global TEXT, TEXT2, TEXT_ON_ACCENT, TEXT_ON_ACCENT2
+    global DISABLED_BG, DISABLED_TEXT
     t = THEMES[name]
     BG, BG2, BG3 = t["BG"], t["BG2"], t["BG3"]
+    HOVER = t["HOVER"]
     ACCENT, ACCENT2 = t["ACCENT"], t["ACCENT2"]
-    SUCCESS, DANGER = t["SUCCESS"], t["DANGER"]
+    DANGER = t["DANGER"]
     TEXT, TEXT2 = t["TEXT"], t["TEXT2"]
     TEXT_ON_ACCENT = t["TEXT_ON_ACCENT"]
+    TEXT_ON_ACCENT2 = t["TEXT_ON_ACCENT2"]
+    DISABLED_BG, DISABLED_TEXT = t["DISABLED_BG"], t["DISABLED_TEXT"]
 
 apply_theme("dark")
 # ─────────────────────────────────────────────
@@ -397,7 +420,7 @@ class GPSApp(tk.Tk):
 
         self.start_btn = tk.Button(btn_frame, text="▶  開始模擬",
                                    font=("Segoe UI", 13, "bold"),
-                                   bg=ACCENT, fg="#000", relief="flat",
+                                   bg=ACCENT, fg=TEXT_ON_ACCENT, relief="flat",
                                    padx=30, pady=12, cursor="hand2",
                                    command=self._start)
         self.start_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
@@ -427,6 +450,18 @@ class GPSApp(tk.Tk):
                                      padx=20, pady=8, cursor="hand2",
                                      command=self._restore_real_location)
         self.restore_btn.pack(fill="x")
+
+        # 登記每顆控制按鈕「啟用時」該用的顏色，_set_btn_enabled() 會據此還原；
+        # 停用時的背景／文字色則統一由 DISABLED_BG / DISABLED_TEXT 決定。
+        for btn, on_bg, on_fg in (
+            (self.start_btn, ACCENT, TEXT_ON_ACCENT),
+            (self.return_btn, BG3, TEXT),
+            (self.stop_btn, DANGER, TEXT_ON_ACCENT),
+            (self.restore_btn, BG3, TEXT2),
+        ):
+            btn.enabled_bg, btn.enabled_fg = on_bg, on_fg
+            btn.config(disabledforeground=DISABLED_TEXT)
+        self._sync_btn_states()
 
         # ── 進度條（左欄）──
         self.progress_var = tk.DoubleVar(value=0)
@@ -471,7 +506,7 @@ class GPSApp(tk.Tk):
 
         # 儲存目前定位按鈕
         save_pin_btn = tk.Button(fav_title_row, text="＋ 儲存目前座標",
-                                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT,
+                                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT2,
                                   relief="flat", padx=10, pady=4, cursor="hand2",
                                   command=self._save_current_pin_as_fav)
         save_pin_btn.pack(side="right", padx=(4, 0))
@@ -503,7 +538,7 @@ class GPSApp(tk.Tk):
 
         self.route_mode_btn = tk.Button(mode_frame, text="🗺  路線移動",
                                         font=("Segoe UI", 10, "bold"),
-                                        bg=ACCENT, fg="#000", relief="flat",
+                                        bg=ACCENT, fg=TEXT_ON_ACCENT, relief="flat",
                                         padx=16, pady=6, cursor="hand2",
                                         command=lambda: self._switch_mode("route"))
         self.route_mode_btn.pack(side="left", padx=4)
@@ -526,7 +561,7 @@ class GPSApp(tk.Tk):
                  bg=BG2, fg=TEXT2).grid(row=1, column=0, sticky="w")
         self.pin_lat = tk.StringVar(value="24.1368")
         tk.Entry(self.pin_frame, textvariable=self.pin_lat, width=16,
-                 font=("Segoe UI", 11), bg=BG3, fg=ACCENT,
+                 font=("Segoe UI", 11), bg=BG3, fg=TEXT,
                  insertbackground=ACCENT, relief="flat", bd=4).grid(
                  row=1, column=1, padx=8)
 
@@ -534,7 +569,7 @@ class GPSApp(tk.Tk):
                  bg=BG2, fg=TEXT2).grid(row=1, column=2, sticky="w")
         self.pin_lon = tk.StringVar(value="120.6862")
         tk.Entry(self.pin_frame, textvariable=self.pin_lon, width=16,
-                 font=("Segoe UI", 11), bg=BG3, fg=ACCENT,
+                 font=("Segoe UI", 11), bg=BG3, fg=TEXT,
                  insertbackground=ACCENT, relief="flat", bd=4).grid(
                  row=1, column=3, padx=8)
 
@@ -562,7 +597,7 @@ class GPSApp(tk.Tk):
                                 self.pin_lon.set(str(lo))
                             ))
             btn.pack(side="left", padx=4)
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT_ON_ACCENT))
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=HOVER, fg=TEXT_ON_ACCENT2))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
 
         # ── 速度設定 ──
@@ -586,7 +621,7 @@ class GPSApp(tk.Tk):
                             padx=10, pady=5, cursor="hand2",
                             command=lambda v=val: self._set_speed(v))
             btn.pack(side="left", padx=4)
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=ACCENT2, fg=TEXT_ON_ACCENT))
+            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=HOVER, fg=TEXT_ON_ACCENT2))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
 
         speed_row = tk.Frame(speed_frame, bg=BG2)
@@ -595,7 +630,7 @@ class GPSApp(tk.Tk):
                  bg=BG2, fg=TEXT2).pack(side="left")
         self.speed_entry = tk.Entry(speed_row, textvariable=self.speed_var,
                                     width=8, font=("Segoe UI", 11),
-                                    bg=BG3, fg=ACCENT, insertbackground=ACCENT,
+                                    bg=BG3, fg=TEXT, insertbackground=ACCENT,
                                     relief="flat", bd=4)
         self.speed_entry.pack(side="left", padx=6)
 
@@ -619,7 +654,7 @@ class GPSApp(tk.Tk):
                   relief="flat", padx=10, pady=3, cursor="hand2",
                   command=self._clear_route_points).pack(side="right")
         tk.Button(route_label_frame, text="＋ 新增點",
-                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT,
+                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT2,
                   relief="flat", padx=10, pady=3, cursor="hand2",
                   command=self._add_point).pack(side="right")
         # 距離/時間資訊：與「＋ 新增點」同一列
@@ -665,14 +700,14 @@ class GPSApp(tk.Tk):
     def _switch_mode(self, mode):
         self.mode.set(mode)
         if mode == "route":
-            self.route_mode_btn.config(bg=ACCENT, fg="#000")
+            self.route_mode_btn.config(bg=ACCENT, fg=TEXT_ON_ACCENT)
             self.pin_mode_btn.config(bg=BG3, fg=TEXT2)
             self.pin_frame.pack_forget()
             self.speed_frame_ref.pack(fill="x", pady=(0, 12))
             self.route_section.pack(fill="x", padx=0)
             self.start_btn.config(text="▶  開始模擬")
         else:
-            self.pin_mode_btn.config(bg=ACCENT2, fg=TEXT_ON_ACCENT)
+            self.pin_mode_btn.config(bg=ACCENT2, fg=TEXT_ON_ACCENT2)
             self.route_mode_btn.config(bg=BG3, fg=TEXT2)
             self.speed_frame_ref.pack_forget()
             self.route_section.pack_forget()
@@ -680,8 +715,36 @@ class GPSApp(tk.Tk):
             self.start_btn.config(text="📌  固定定位")
         self._update_return_btn_state()
 
+    def _set_btn_enabled(self, btn, enabled):
+        """切換控制按鈕的可用狀態（含背景色）。
+
+        tkinter 的 state="disabled" 只會把文字換成 disabledforeground，背景色
+        完全不動，所以停用中的「停止」仍是滿版 DANGER 底，看起來比真正可按的
+        按鈕更醒目。這裡連背景一起換掉，讓停用狀態退到 BG3 之下。
+        """
+        if enabled:
+            btn.config(state="normal", bg=btn.enabled_bg, fg=btn.enabled_fg,
+                       cursor="hand2")
+        else:
+            btn.config(state="disabled", bg=DISABLED_BG, cursor="")
+
+    def _sync_btn_states(self):
+        """由 pending_action / mode 推導四顆控制按鈕的可用性。
+
+        _build_ui() 尾端會呼叫一次，因此切換主題整個重建 UI 之後，按鈕狀態
+        （以及對應的顏色）不會退回建立時的預設值。
+        """
+        busy = self.pending_action in ("forward", "reverse", "disconnect")
+        self._set_btn_enabled(self.start_btn, not busy)
+        self._set_btn_enabled(self.stop_btn,
+                              self.pending_action in ("forward", "reverse"))
+        self._set_btn_enabled(self.restore_btn, not busy)
+        self._update_return_btn_state()
+
     def _update_return_btn_state(self):
-        self.return_btn.config(state="normal" if self.mode.get() == "route" else "disabled")
+        enabled = (self.mode.get() == "route"
+                   and self.pending_action not in ("reverse", "disconnect"))
+        self._set_btn_enabled(self.return_btn, enabled)
 
     def _refresh_fav_list(self):
         for w in self.fav_list_frame.winfo_children():
@@ -716,7 +779,7 @@ class GPSApp(tk.Tk):
 
             # 載入按鈕
             load_btn = tk.Button(row, text="載入",
-                                  font=("Segoe UI", 8), bg=ACCENT, fg="#000",
+                                  font=("Segoe UI", 8), bg=ACCENT, fg=TEXT_ON_ACCENT,
                                   relief="flat", padx=8, pady=2, cursor="hand2",
                                   command=lambda f=fav: self._load_fav(f))
             load_btn.pack(side="left", padx=4)
@@ -825,7 +888,7 @@ class GPSApp(tk.Tk):
                 var = tk.StringVar(value=str(pt[j]))
                 e = tk.Entry(row, textvariable=var, width=w,
                              font=("Segoe UI", 9), bg=row["bg"],
-                             fg=ACCENT if j < 2 else TEXT,
+                             fg=TEXT,
                              insertbackground=ACCENT, relief="flat", bd=2)
                 e.pack(side="left", padx=2, fill="x", expand=exp)
                 idx, field = i, j
@@ -923,10 +986,7 @@ class GPSApp(tk.Tk):
                 messagebox.showerror("錯誤", "請輸入有效的緯度/經度數值")
                 return
         self.pending_action = "forward"
-        self.start_btn.config(state="disabled")
-        self.stop_btn.config(state="normal")
-        self.restore_btn.config(state="disabled")
-        self._update_return_btn_state()
+        self._sync_btn_states()
         if self.mode.get() == "pin":
             self._log("📌 固定定位模式啟動...")
         else:
@@ -944,10 +1004,7 @@ class GPSApp(tk.Tk):
             messagebox.showerror("錯誤", "請至少設定 2 個路線點")
             return
         self.pending_action = "reverse"
-        self.start_btn.config(state="disabled")
-        self.stop_btn.config(state="normal")
-        self.return_btn.config(state="disabled")
-        self.restore_btn.config(state="disabled")
+        self._sync_btn_states()
         self._log("↩  返回：從目前座標往回走...")
         self._ensure_session_thread()
 
@@ -959,10 +1016,7 @@ class GPSApp(tk.Tk):
             messagebox.showwarning("警告", "請先按「停止」，再恢復真實定位")
             return
         self.pending_action = "disconnect"
-        self.restore_btn.config(state="disabled")
-        self.start_btn.config(state="disabled")
-        self.stop_btn.config(state="disabled")
-        self.return_btn.config(state="disabled")
+        self._sync_btn_states()
         self._log("🛰  恢復真實定位中...")
 
     def _ensure_session_thread(self):
@@ -981,16 +1035,13 @@ class GPSApp(tk.Tk):
 
     def _on_session_ended(self):
         self.session_active = False
-        self.start_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
-        self.restore_btn.config(state="normal")
-        self._update_return_btn_state()
+        # 連線已結束（正常斷線或中途出錯），把動作歸零再同步按鈕狀態，
+        # 否則殘留的 "disconnect"／"forward" 會讓按鈕全部卡在停用。
+        self.pending_action = "pause"
+        self._sync_btn_states()
 
     def _on_paused(self):
-        self.start_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
-        self.restore_btn.config(state="normal")
-        self._update_return_btn_state()
+        self._sync_btn_states()
 
     async def _session_main(self):
         """維持一條長連線：開始/返回/停止都只是換動作，不會中斷連線；
