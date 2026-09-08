@@ -608,9 +608,9 @@ class GPSApp(tk.Tk):
         tk.Label(speed_frame, text="移動速度", font=("Segoe UI", 11, "bold"),
                  bg=BG2, fg=TEXT).grid(row=0, column=0, sticky="w")
 
-        self.speed_var = tk.DoubleVar(value=5.56)
-        presets = [("步行 5 km/h", 1.39), ("慢跑 10 km/h", 2.78),
-                   ("騎車 20 km/h", 5.56), ("開車 40 km/h", 11.11)]
+        self.speed_var = tk.DoubleVar(value=20.0)
+        presets = [("步行 5 km/h", 5), ("慢跑 10 km/h", 10),
+                   ("騎車 20 km/h", 20), ("開車 40 km/h", 40)]
 
         preset_frame = tk.Frame(speed_frame, bg=BG2)
         preset_frame.grid(row=1, column=0, sticky="w", pady=8)
@@ -626,7 +626,7 @@ class GPSApp(tk.Tk):
 
         speed_row = tk.Frame(speed_frame, bg=BG2)
         speed_row.grid(row=2, column=0, sticky="w")
-        tk.Label(speed_row, text="自訂 m/s：", font=("Segoe UI", 10),
+        tk.Label(speed_row, text="自訂 km/h：", font=("Segoe UI", 10),
                  bg=BG2, fg=TEXT2).pack(side="left")
         self.speed_entry = tk.Entry(speed_row, textvariable=self.speed_var,
                                     width=8, font=("Segoe UI", 11),
@@ -635,7 +635,7 @@ class GPSApp(tk.Tk):
         self.speed_entry.pack(side="left", padx=6)
 
         self.loop_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(speed_row, text="循環模式",
+        tk.Checkbutton(speed_row, text="循環模式（來回）",
                        variable=self.loop_var,
                        font=("Segoe UI", 10), bg=BG2, fg=TEXT2,
                        selectcolor=BG3, activebackground=BG2,
@@ -875,6 +875,10 @@ class GPSApp(tk.Tk):
     def _set_speed(self, val):
         self.speed_var.set(round(val, 2))
 
+    def _speed_ms(self):
+        """UI 的速度以 km/h 輸入，換算成內部計算用的 m/s。"""
+        return self.speed_var.get() / 3.6
+
     def _refresh_route_rows(self):
         for w in self.route_container.winfo_children():
             w.destroy()
@@ -958,7 +962,7 @@ class GPSApp(tk.Tk):
                           self.route[i+1][0], self.route[i+1][1])
                 for i in range(len(self.route)-1)
             )
-            speed = self.speed_var.get()
+            speed = self._speed_ms()
             secs = dist / speed if speed > 0 else 0
             mins = int(secs // 60)
             sec2 = int(secs % 60)
@@ -1108,16 +1112,18 @@ class GPSApp(tk.Tk):
     async def _walk_route(self, sim, direction):
         """direction=1 往路線終點走，direction=-1 往路線起點走回去。
         走到一半若 self.pending_action 被改成別的值（暫停/切換方向/斷線），
-        會立刻中斷並把目前位置留在 self.point_idx，交回外層迴圈處理。"""
+        會立刻中斷並把目前位置留在 self.point_idx，交回外層迴圈處理。
+        循環模式只由「開始」啟動的 forward 觸發：走到終點後自動折返走回起點，
+        再從起點往終點走，如此來回往復，直到 pending_action 被改成別的值。"""
         action_name = "forward" if direction == 1 else "reverse"
-        suffix = "" if direction == 1 else "（返回中）"
         loop_mode = self.loop_var.get() if direction == 1 else False
         if direction == -1:
             self.after(0, self._log, "↩  返回中，沿路線往回走...")
 
         idx = self.point_idx
         while True:
-            speed = self.speed_var.get()
+            suffix = "" if direction == 1 else "（返回中）"
+            speed = self._speed_ms()
             points = interpolate_points([(r[0], r[1], "") for r in self.route], speed, 1.0)
             total = len(points)
             idx = max(0, min(idx, total - 1))
@@ -1141,10 +1147,14 @@ class GPSApp(tk.Tk):
             if interrupted:
                 return
 
-            if direction == 1 and loop_mode and self.pending_action == "forward":
-                self.after(0, self._log, "🔁 循環模式：回到起點重新出發")
-                idx = 0
-                self.point_idx = 0
+            if loop_mode and self.pending_action == action_name:
+                if direction == 1:
+                    self.after(0, self._log, "🔁 循環模式：已抵達終點，沿路線折返")
+                else:
+                    self.after(0, self._log, "🔁 循環模式：已回到起點，再次出發")
+                direction = -direction
+                idx = max(0, min(idx + direction, total - 1))
+                self.point_idx = idx
                 continue
 
             if direction == 1:

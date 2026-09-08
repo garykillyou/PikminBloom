@@ -35,7 +35,7 @@ python gps_app.py
 4. 座標注入本身仍是 `sim.set(lat, lon)`，只是呼叫位置搬到 `_walk_route()` / `_walk_pin()` 這兩個由 `_session_main()` 依 `pending_action` 呼叫的協程裡。
 
 ### 兩種模式（由 `self.mode` StringVar 控制，動作由 `self.pending_action` 驅動）
-- **路線模式（route）**：`_walk_route(sim, direction)` 中 `direction=1` 往終點走、`direction=-1` 往起點走回去（「返回」功能，由 `_reverse()` 觸發，設定 `pending_action = "reverse"`）。`interpolate_points()` 依 `haversine()` 算出的距離與設定速度（m/s）把路線切成每秒一個內插點；目前走到第幾個內插點記錄在 `self.point_idx`，中斷（停止/切換方向/斷線）時會停在原點，之後從該點繼續。支援 `loop_var` 循環模式（只在 `direction=1` 且未被中斷時生效）。
+- **路線模式（route）**：`_walk_route(sim, direction)` 中 `direction=1` 往終點走、`direction=-1` 往起點走回去（「返回」功能，由 `_reverse()` 觸發，設定 `pending_action = "reverse"`）。`interpolate_points()` 依 `haversine()` 算出的距離與設定速度（UI 以 km/h 輸入，經 `_speed_ms()` 換算成 m/s）把路線切成每秒一個內插點；目前走到第幾個內插點記錄在 `self.point_idx`，中斷（停止/切換方向/斷線）時會停在原點，之後從該點繼續。支援 `loop_var` 循環模式（只由「開始」的 `direction=1` 啟動）：走到終點後在同一個 `_walk_route()` 內把 `direction` 反向、來回往復（頭→尾→頭→尾…），中途被中斷才會結束。
 - **固定定位模式（pin）**：`_walk_pin(sim)` 呼叫一次 `sim.set(lat, lon)` 後立刻把 `pending_action` 設回 `"pause"`，讓外層 while 迴圈進入 `await asyncio.sleep(0.2)` 的閒置分支，藉此在同一條長連線上「保持」定位，直到使用者按「停止」（其實已經是 pause 狀態，UI 只更新按鈕）或「恢復真實定位」。
 
 ### 執行緒與非同步整合（長連線 + 狀態機，取代舊版每次都重連的做法）
