@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 單一檔案 Python/Tkinter 桌面工具，透過 `pymobiledevice3` 模擬 iPhone（iOS 26）的 GPS 定位，
 免越獄、免 iTunes，僅需 USB 連線。整個應用程式邏輯都在 [gps_app.py](gps_app.py) 一個檔案中，
 沒有其他模組、套件或子目錄。執行期間會在同目錄產生兩個 JSON 狀態檔：`gps_favorites.json`
-（最愛地點/路線）與 `gps_settings.json`（目前僅存主題偏好）。
+（最愛地點/路線）與 `gps_settings.json`（主題偏好與視窗幾何）。
 
 ## 常用指令
 
@@ -54,6 +54,12 @@ python gps_app.py
 - 兩組色票集中定義在檔案開頭的 `THEMES` dict（`"dark"` / `"light"`），`apply_theme(name)` 會把對應色票寫入模組層級的全域變數（`BG`/`BG2`/`BG3`/`HOVER`/`ACCENT`/`ACCENT2`/`DANGER`/`TEXT`/`TEXT2`/`TEXT_ON_ACCENT`/`TEXT_ON_ACCENT2`），其中 `TEXT_ON_ACCENT` 專用於亮底色（`ACCENT`/`DANGER`）、`TEXT_ON_ACCENT2` 專用於暗底色（`ACCENT2`/`HOVER`），兩者不可互換；另有 `DISABLED_BG`/`DISABLED_TEXT` 專供按鈕停用狀態使用（亮度刻意壓在 `BG3` 之下，讓停用按鈕退到「可按的次要按鈕」之後）。以上全域變數供整份檔案的 UI 建構函式讀取。
 - 目前套用的主題名稱存在 `self.theme_name`，並持久化在 `gps_settings.json`（`load_settings()` / `save_settings()`）；啟動時讀取上次的偏好，找不到或值不合法就 fallback 回 `"dark"`。
 - `_toggle_theme()` 切換主題時，因為顏色是模組全域變數而非 widget 屬性，唯一能讓所有既有 widget 換色的方式是整個銷毀重建：先暫存目前輸入框/勾選狀態，`apply_theme()` 換色後銷毀 `self.container` 並重新呼叫 `_build_scroll_container()` + `_build_ui()`，最後再把暫存的狀態寫回新建立的 widget。新增任何有「使用者輸入中狀態」的欄位時，記得同步加進這段暫存/還原流程，否則切換主題會遺失使用者輸入。
+
+### 視窗位置記憶（多螢幕）
+- 視窗大小/座標/是否最大化存在 `gps_settings.json` 的 `"window"` 欄位，由 `_restore_window_geometry()`（啟動時還原）、`_remember_window_geometry()`（`<Configure>` 事件持續記錄）、`_save_window_geometry()`（寫檔；由 `_on_close()` 經 `protocol("WM_DELETE_WINDOW", ...)` 觸發，`_toggle_theme()` 也改呼叫它而非直接 `save_settings()`，否則切主題會把啟動時讀進來的舊 `window` 值再寫一次）三個方法負責；沒有設定檔時 fallback 回 `DEFAULT_WINDOW_W/H`（1500x820）+ 最大化，也就是舊行為。
+- 多螢幕之所以會回到上次那一台，是因為 `__init__` 先 `geometry(...+x+y)` 把視窗擺到上次的座標，`_settle_window_and_reset_scroll()` 才 `state("zoomed")`——Windows 的最大化是相對於視窗當下所在的螢幕，順序反了就一定回到主螢幕。
+- `_remember_window_geometry()` 只在 `state() == "normal"` 時記座標（最大化時的 `-8, -8` 不能當還原基準），且一律解析 `self.geometry()` 字串而非 `winfo_x()/winfo_y()`：後者是客戶區座標，與 `geometry()` 設定用的外框座標差一個標題列高度，混用會讓視窗每次啟動往下漂移。另外根視窗的 bindtag 在所有子 widget 上都有，所以處理函式開頭必須用 `event.widget is not self` 擋掉子 widget 的 `<Configure>`。
+- 螢幕被拔掉或解析度改變時，舊座標會讓視窗跑到看不見的地方。`winfo_screenwidth()` 只回報主螢幕大小不足以判斷，因此改用 `point_on_any_monitor()`（ctypes 呼叫 Win32 `MonitorFromPoint` + `MONITOR_DEFAULTTONULL`，拿標題列中心點去問）；驗證失敗就只套用大小、位置交給 Windows 決定。非 Windows 平台一律視為有效。
 
 ### 視窗捲動與響應式版面
 - 整個視窗內容包在一個可捲動的 `Canvas` + `Frame`（`_build_scroll_container()` 建立 `self.canvas`/`self.scroll_frame`），捲軸（`self.scrollbar`）只有在內容高度超過可視區域時才會 `pack()` 顯示（`_update_scrollbar_visibility()`），內容變矮時會自動 `pack_forget()`。

@@ -11,6 +11,8 @@ from tkinter import ttk, messagebox, scrolledtext, simpledialog, filedialog
 import sys
 import json
 import os
+import re
+import ctypes
 import xml.etree.ElementTree as ET
 
 FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gps_favorites.json")
@@ -123,6 +125,39 @@ def save_settings(settings):
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
+# ── 視窗位置記憶 ────────────────────
+# 視窗幾何（大小 + 座標 + 是否最大化）存在 gps_settings.json 的 "window" 欄位，
+# 下次啟動時先把視窗移回上次的座標，再決定要不要最大化——Windows 的「最大化」
+# 是相對於視窗當下所在的螢幕，所以只要先把座標擺對，多螢幕環境就會回到上次那一台。
+DEFAULT_WINDOW_W = 1500
+DEFAULT_WINDOW_H = 820
+MIN_WINDOW_W = 560
+MIN_WINDOW_H = 360
+
+MONITOR_DEFAULTTONULL = 0
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+def point_on_any_monitor(x, y):
+    """(x, y) 是否落在目前接上的任何一台螢幕內。
+
+    tkinter 的 winfo_screenwidth()/winfo_screenheight() 只回報主螢幕大小，無法判斷
+    副螢幕上（甚至是負座標）的位置，所以改用 Win32 的 MonitorFromPoint：帶
+    MONITOR_DEFAULTTONULL 時，座標不在任何螢幕上就會回傳 NULL，代表上次那台螢幕
+    已經拔掉或解析度變了，還原下去視窗會跑到看不見的地方。
+    非 Windows 平台或呼叫失敗時一律當作有效，不因為檢查不了就丟掉使用者的位置。
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        user32 = ctypes.windll.user32
+        user32.MonitorFromPoint.restype = ctypes.c_void_p
+        user32.MonitorFromPoint.argtypes = [_POINT, ctypes.c_ulong]
+        return bool(user32.MonitorFromPoint(_POINT(int(x), int(y)), MONITOR_DEFAULTTONULL))
+    except Exception:
+        return True
+
 # ── 顏色主題（深色 / 淺色）────────────────────
 # BG / BG2 / BG3 是三層堆疊背景（主底 → 卡片 → 輸入框／次要按鈕），
 # 相鄰兩層的對比度刻意拉到 1.2 以上，否則深色下看不出層級。
@@ -216,9 +251,12 @@ class GPSApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("iPhone GPS 路線模擬器")
-        self.geometry("1500x820")
         self.resizable(True, True)
-        self.minsize(560, 360)
+        self.minsize(MIN_WINDOW_W, MIN_WINDOW_H)
+
+        self.settings = load_settings()
+        # 視窗幾何要在建立任何內容前就定案，否則會先閃一下預設位置再跳走。
+        self._restore_window_geometry()
 
         # 定位模擬連線是「長連線」：只要連上裝置，就算按停止／返回也不會斷線，
         # 只有明確按「恢復真實定位」才會真的中斷連線（中斷當下裝置會自動恢復真實 GPS）。
@@ -230,7 +268,6 @@ class GPSApp(tk.Tk):
         self.mode = tk.StringVar(value="route")
         self.favorites = load_favorites()
         self._layout_wide = None
-        self.settings = load_settings()
         self.theme_name = self.settings.get("theme", "dark")
         if self.theme_name not in THEMES:
             self.theme_name = "dark"
@@ -239,15 +276,74 @@ class GPSApp(tk.Tk):
 
         self._build_scroll_container()
         self._build_ui()
-        self._apply_responsive_layout(1500)
+        self._apply_responsive_layout(self._start_width)
+        self.bind("<Configure>", self._remember_window_geometry)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         # 先讓視窗以一般大小完成第一次繪製，再最大化：一方面避免最大化動畫途中
         # 內容尚未畫出而露出空白背景，另一方面在真正變成最大化尺寸後，強制把
         # scrollregion 與捲動位置重新校正到最上方，避免出現「明明沒往下捲，
         # 卻可以往上捲出空白」的殘留捲動位移。
-        self.after(10, self._maximize_and_reset_scroll)
+        self.after(10, self._settle_window_and_reset_scroll)
 
-    def _maximize_and_reset_scroll(self):
-        self.state("zoomed")
+    # ── 視窗幾何：還原 / 記錄 / 存檔 ────────────────────
+    def _restore_window_geometry(self):
+        win = self.settings.get("window") or {}
+        w, h = win.get("width"), win.get("height")
+        x, y = win.get("x"), win.get("y")
+        # 找不到設定（第一次啟動）時維持舊行為：主螢幕、最大化。
+        self._start_maximized = bool(win.get("maximized", True))
+        if not isinstance(w, int) or not isinstance(h, int) or w < MIN_WINDOW_W or h < MIN_WINDOW_H:
+            w, h = DEFAULT_WINDOW_W, DEFAULT_WINDOW_H
+        # 拿標題列中間的點去問「這個位置還在哪台螢幕上」，比左上角不容易壓在螢幕邊界上。
+        if isinstance(x, int) and isinstance(y, int) and point_on_any_monitor(x + w // 2, y + 15):
+            self.geometry(f"{w}x{h}+{x}+{y}")
+        else:
+            x = y = None
+            self.geometry(f"{w}x{h}")
+        self._start_width = w
+        self._saved_window = {"width": w, "height": h, "x": x, "y": y,
+                              "maximized": self._start_maximized}
+
+    def _remember_window_geometry(self, event):
+        # 根視窗的 bindtag 在每個子 widget 上都有，子 widget 的 <Configure> 也會打到這裡。
+        if event.widget is not self:
+            return
+        state = self.state()
+        self._saved_window["maximized"] = (state == "zoomed")
+        if state != "normal":
+            # 最大化／最小化時的座標（例如 -8, -8）不能拿來當下次的還原基準。
+            return
+        # 用 geometry() 字串而不是 winfo_x()/winfo_y()：後者回傳的是客戶區位置，跟
+        # geometry() 設定時用的外框座標差一個標題列高度，存還一次就會往下漂移一次。
+        m = re.match(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$", self.geometry())
+        if not m:
+            return
+        w, h, x, y = (int(v) for v in m.groups())
+        if w < MIN_WINDOW_W or h < MIN_WINDOW_H:
+            # 視窗真正畫出來之前的 1x1 過渡狀態，不要記下來。
+            return
+        self._saved_window.update({"width": w, "height": h, "x": x, "y": y})
+
+    def _save_window_geometry(self):
+        win = {"width": self._saved_window["width"],
+               "height": self._saved_window["height"],
+               "maximized": self._saved_window["maximized"]}
+        if isinstance(self._saved_window["x"], int) and isinstance(self._saved_window["y"], int):
+            win["x"] = self._saved_window["x"]
+            win["y"] = self._saved_window["y"]
+        self.settings["window"] = win
+        save_settings(self.settings)
+
+    def _on_close(self):
+        try:
+            self._save_window_geometry()
+        except Exception:
+            pass
+        self.destroy()
+
+    def _settle_window_and_reset_scroll(self):
+        if self._start_maximized:
+            self.state("zoomed")
         self.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.canvas.yview_moveto(0)
@@ -359,7 +455,9 @@ class GPSApp(tk.Tk):
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
         apply_theme(self.theme_name)
         self.settings["theme"] = self.theme_name
-        save_settings(self.settings)
+        # 不直接 save_settings()：那樣寫回去的 "window" 會是啟動時讀進來的舊值，
+        # 改呼叫 _save_window_geometry() 順手把目前的視窗位置一起存下去。
+        self._save_window_geometry()
 
         self.configure(bg=BG)
         self.container.destroy()
