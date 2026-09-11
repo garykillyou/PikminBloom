@@ -1,13 +1,15 @@
 # iPhone GPS 路線模擬器 - 圖形介面版
 # 執行前請確認：
 #   1. 系統管理員視窗執行：pymobiledevice3 remote tunneld
-#   2. 執行此 App：C:\Python311\python.exe gps_app.py
+#   2. 執行此 App：python gps_app.py
 
 import asyncio
 import math
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, simpledialog, filedialog
+import tkinter.font as tkfont
+from tkinter import messagebox, simpledialog, filedialog
+import customtkinter as ctk
 import sys
 import json
 import os
@@ -140,13 +142,17 @@ class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 def point_on_any_monitor(x, y):
-    """(x, y) 是否落在目前接上的任何一台螢幕內。
+    """(x, y)（實體像素）是否落在目前接上的任何一台螢幕內。
 
     tkinter 的 winfo_screenwidth()/winfo_screenheight() 只回報主螢幕大小，無法判斷
     副螢幕上（甚至是負座標）的位置，所以改用 Win32 的 MonitorFromPoint：帶
     MONITOR_DEFAULTTONULL 時，座標不在任何螢幕上就會回傳 NULL，代表上次那台螢幕
     已經拔掉或解析度變了，還原下去視窗會跑到看不見的地方。
     非 Windows 平台或呼叫失敗時一律當作有效，不因為檢查不了就丟掉使用者的位置。
+
+    注意：CustomTkinter 會呼叫 SetProcessDpiAwareness()，之後 CTk.geometry() 回報的是
+    「邏輯像素」，而這個 Win32 API 吃的是實體像素，呼叫端必須先換算（見
+    GPSApp._logical_to_physical()）。
     """
     if sys.platform != "win32":
         return True
@@ -161,12 +167,12 @@ def point_on_any_monitor(x, y):
 # ── 顏色主題（深色 / 淺色）────────────────────
 # BG / BG2 / BG3 是三層堆疊背景（主底 → 卡片 → 輸入框／次要按鈕），
 # 相鄰兩層的對比度刻意拉到 1.2 以上，否則深色下看不出層級。
-# HOVER 是次要按鈕的滑入色（比 BG3 更亮，深色介面的 hover 應該變亮而非變暗）。
+# HOVER 是按鈕的滑入色（比 BG3 更亮，深色介面的 hover 應該變亮而非變暗）。
 # ACCENT 是主要動作色，DANGER 刻意換成橙色系，避免與 ACCENT 同色而分不出
 # 「主要動作」與「破壞性動作」。TEXT_ON_ACCENT 用在亮底色（ACCENT / DANGER）上，
 # TEXT_ON_ACCENT2 用在暗底色（ACCENT2 / HOVER）上，兩者不可互換。
 # DISABLED_BG / DISABLED_TEXT 是按鈕停用狀態：亮度刻意壓在 BG3（可按的次要按鈕）
-# 之下，因為 tkinter 的 state="disabled" 只會換文字色、不會換背景色。
+# 之下，因為 CTkButton 的 state="disabled" 只會換文字色、不會換背景色。
 THEMES = {
     "dark": {
         "BG": "#1D1616", "BG2": "#302323", "BG3": "#4E2F2F",
@@ -192,29 +198,149 @@ THEMES = {
     },
 }
 
-BG = BG2 = BG3 = HOVER = ACCENT = ACCENT2 = DANGER = None
-TEXT = TEXT2 = TEXT_ON_ACCENT = TEXT_ON_ACCENT2 = None
-DISABLED_BG = DISABLED_TEXT = None
+def _pair(key):
+    """把 THEMES 的同名色票組成 CustomTkinter 的 (淺色, 深色) tuple。
 
-def apply_theme(name):
-    global BG, BG2, BG3, HOVER, ACCENT, ACCENT2, DANGER
-    global TEXT, TEXT2, TEXT_ON_ACCENT, TEXT_ON_ACCENT2
-    global DISABLED_BG, DISABLED_TEXT
-    t = THEMES[name]
-    BG, BG2, BG3 = t["BG"], t["BG2"], t["BG3"]
-    HOVER = t["HOVER"]
-    ACCENT, ACCENT2 = t["ACCENT"], t["ACCENT2"]
-    DANGER = t["DANGER"]
-    TEXT, TEXT2 = t["TEXT"], t["TEXT2"]
-    TEXT_ON_ACCENT = t["TEXT_ON_ACCENT"]
-    TEXT_ON_ACCENT2 = t["TEXT_ON_ACCENT2"]
-    DISABLED_BG, DISABLED_TEXT = t["DISABLED_BG"], t["DISABLED_TEXT"]
+    CTk 的每個顏色參數都接受這種 tuple，並在 set_appearance_mode() 時自己挑對應
+    的那一個重畫——這是整份 UI 不需要銷毀重建就能換主題的關鍵。順序固定為
+    (light, dark)，不可對調。
+    """
+    return (THEMES["light"][key], THEMES["dark"][key])
 
-apply_theme("dark")
+BG, BG2, BG3 = _pair("BG"), _pair("BG2"), _pair("BG3")
+HOVER = _pair("HOVER")
+ACCENT, ACCENT2 = _pair("ACCENT"), _pair("ACCENT2")
+DANGER = _pair("DANGER")
+TEXT, TEXT2 = _pair("TEXT"), _pair("TEXT2")
+TEXT_ON_ACCENT, TEXT_ON_ACCENT2 = _pair("TEXT_ON_ACCENT"), _pair("TEXT_ON_ACCENT2")
+DISABLED_BG, DISABLED_TEXT = _pair("DISABLED_BG"), _pair("DISABLED_TEXT")
+
+# ── 外觀常數 ────────────────────
+CARD_RADIUS = 10
+BTN_RADIUS = 8
+FONT = "Segoe UI"
+FONT_MONO = "Consolas"
+FONT_EMOJI = "Segoe UI Emoji"
+
+# 字級。全部集中在這裡，不要在 widget 裡直接寫數字。
+# 下限刻意訂在 FS_XS=10pt：中文字在 11px 以下筆畫會糊在一起，
+# 舊版用到的 8pt/9pt 對拉丁字母還能看，中文則完全不行。
+FS_XS = 10        # 表格列、列內小按鈕
+FS_SM = 11        # 次要說明文字、預設值按鈕
+FS_MD = 12        # 一般標籤
+FS_LG = 13        # 面板標題
+FS_XL = 15        # 主要控制按鈕
+FS_TITLE = 22     # App 標題
+FS_EMOJI = 12     # 列內圖示
+FS_EMOJI_LG = 30  # 標題列圖示
+
+# 整體介面放大倍率。CustomTkinter 的 widget scaling 會同時放大字級與 widget 尺寸，
+# 所以調這一個值就能整體再微調大小，不必逐一改上面的字級。
+# 只影響 widget，不影響視窗幾何（那是 window scaling，兩者獨立）。
+UI_SCALE = 1.15
+
+# 按鈕配色組合。hover_color 一定要明確給值：CTkButton 在沒指定時會套用
+# CustomTkinter 預設主題（藍色系）的 hover 色，與本 App 的色票完全不搭。
+BTN_PRIMARY = {"fg_color": ACCENT, "text_color": TEXT_ON_ACCENT, "hover_color": HOVER}
+BTN_SECONDARY = {"fg_color": BG3, "text_color": TEXT2, "hover_color": HOVER}
+BTN_SUCCESS = {"fg_color": ACCENT2, "text_color": TEXT_ON_ACCENT2, "hover_color": HOVER}
+BTN_STOP = {"fg_color": DANGER, "text_color": TEXT_ON_ACCENT, "hover_color": HOVER}
+
+def make_card(parent, padx=20, pady=14, fg_color=BG2):
+    """建立一張卡片，回傳 (外框, 內容框)。
+
+    CTkFrame 沒有 tk.Frame 的 padx/pady 內距參數，所以用一層透明內框把內距做出來。
+    外框負責 pack()/pack_forget()（模式切換用），子 widget 一律放進內容框。
+    """
+    outer = ctk.CTkFrame(parent, fg_color=fg_color, corner_radius=CARD_RADIUS)
+    inner = ctk.CTkFrame(outer, fg_color="transparent")
+    inner.pack(fill="both", expand=True, padx=padx, pady=pady)
+    return outer, inner
+
+def icon_for(fav):
+    """最愛項目的類型圖示。"""
+    return "📌" if fav["type"] == "pin" else "🗺"
+
+_FONT_CACHE = {}
+
+def measure_font(font):
+    """取得可量測文字寬度的 tkfont.Font（依 font tuple 快取）。
+
+    用未縮放的字級建立，量出來的寬度就是 widget 單位，可以直接跟
+    _physical_to_widget_units() 的結果比較。
+    """
+    if font not in _FONT_CACHE:
+        weight = "bold" if len(font) > 2 and font[2] == "bold" else "normal"
+        _FONT_CACHE[font] = tkfont.Font(family=font[0], size=font[1], weight=weight)
+    return _FONT_CACHE[font]
+
+def elide_to_width(text, font, max_units):
+    """把 text 裁到 max_units（widget 單位）以內，被裁掉時尾端補「…」。
+
+    單純讓文字在容器裡被切掉會斷在字的中間，看起來像顯示錯誤；補上省略號
+    才看得出來是「後面還有」。用二分搜尋找最長的可容納前綴。
+    """
+    f = measure_font(font)
+    if max_units <= 0 or f.measure(text) <= max_units:
+        return text
+    ellipsis_w = f.measure("…")
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if f.measure(text[:mid]) + ellipsis_w <= max_units:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + "…"
+
+def set_scrollbar_visibility(scrollable_frame):
+    """內容高度塞得下時隱藏捲軸，塞不下才顯示。
+
+    CTkScrollableFrame 的捲軸是在 _create_grid() 裡無條件 grid() 的，沒有自動隱藏
+    機制，只能自己動它。這裡刻意碰了 _scrollbar / _parent_canvas 兩個私有屬性，
+    是與 CustomTkinter 內部實作耦合的已知風險點；用 getattr + try 包住，萬一未來
+    版本改名也只是退回「捲軸固定顯示」，不會讓整個 UI 壞掉。
+    """
+    scrollbar = getattr(scrollable_frame, "_scrollbar", None)
+    canvas = getattr(scrollable_frame, "_parent_canvas", None)
+    if scrollbar is None or canvas is None:
+        return
+    try:
+        if canvas.yview() == (0.0, 1.0):
+            scrollbar.grid_remove()
+        else:
+            scrollbar.grid()
+    except Exception:
+        pass
+
 # ─────────────────────────────────────────────
 
 WIDE_LAYOUT_BREAKPOINT = 1000
 ROUTE_TABLE_MAX_ROWS = 15
+
+# 路線表格是虛擬化清單：不論路線有幾個點，都只建立這麼多個列 widget，
+# 捲動時把它們重新綁到不同的資料索引（見 GPSApp._render_route_window）。
+# 多備 2 列是為了捲到一半時上下邊緣不會露空。
+# 一個 CTk widget 約 3ms，446 個點若每列都建就是 2230 個 widget、8 秒；
+# 虛擬化之後固定只建 17 列，載入時間與路線長度無關。
+ROUTE_ROW_POOL = ROUTE_TABLE_MAX_ROWS + 2
+
+# 路線表格的欄寬（像素）。CTkLabel / CTkEntry 的 width 是像素而非字元數，
+# 表頭與每一列必須共用同一組數值才對得齊。
+ROUTE_COL_INDEX_W = 34
+ROUTE_COL_COORD_W = 96
+ROUTE_COL_DEL_W = 44
+
+# 最愛列表的欄寬（像素）與列高。名稱欄會吃掉剩餘寬度，其餘欄位一律固定，
+# 這樣名稱再長也不會把「載入」「✕」擠變形。
+FAV_ROW_H = 28
+FAV_COL_ICON_W = 26
+FAV_COL_NAME_MIN_W = 80
+FAV_COL_PREVIEW_W = 120
+FAV_COL_DEL_W = 30
+
+# 執行日誌高度 = 視窗高度 40% 再扣掉這麼多行。
+LOG_SHRINK_LINES = 3
 
 DEFAULT_ROUTE = [
     (24.1368, 120.6862, "台中火車站"),
@@ -247,14 +373,25 @@ def interpolate_points(route, speed_ms, interval_sec):
     points.append((route[-1][0], route[-1][1]))
     return points
 
-class GPSApp(tk.Tk):
+class GPSApp(ctk.CTk):
     def __init__(self):
-        super().__init__()
+        # 外觀模式要在建立視窗前就定案：CTk.__init__() 會依當下的模式決定
+        # Windows 標題列要用深色還是淺色。
+        settings = load_settings()
+        theme_name = settings.get("theme", "dark")
+        if theme_name not in THEMES:
+            theme_name = "dark"
+        ctk.set_appearance_mode(theme_name)
+        ctk.set_widget_scaling(UI_SCALE)
+
+        super().__init__(fg_color=BG)
+        self.theme_name = theme_name
+        self.settings = settings
+
         self.title("iPhone GPS 路線模擬器")
         self.resizable(True, True)
         self.minsize(MIN_WINDOW_W, MIN_WINDOW_H)
 
-        self.settings = load_settings()
         # 視窗幾何要在建立任何內容前就定案，否則會先閃一下預設位置再跳走。
         self._restore_window_geometry()
 
@@ -268,24 +405,38 @@ class GPSApp(tk.Tk):
         self.mode = tk.StringVar(value="route")
         self.favorites = load_favorites()
         self._layout_wide = None
-        self.theme_name = self.settings.get("theme", "dark")
-        if self.theme_name not in THEMES:
-            self.theme_name = "dark"
-        apply_theme(self.theme_name)
-        self.configure(bg=BG)
+        self._log_line_h = None
+        # 路線表格虛擬化用的狀態
+        self._route_rows = []           # 可重複使用的列 widget
+        self._route_row_h = None        # 單列高度（實體像素），量一次就快取
+        self._route_rebinding = False   # 換綁資料時擋掉 Entry 的 write callback
+        self._route_rendering = False   # 防止 place() 觸發的捲動事件遞迴
 
         self._build_scroll_container()
         self._build_ui()
         self._apply_responsive_layout(self._start_width)
-        self.bind("<Configure>", self._remember_window_geometry)
+        # 一定要 add="+"：CTk.__init__() 自己也綁了 <Configure>（_update_dimensions_event）
+        # 來追蹤視窗尺寸，不加就會把它蓋掉。
+        self.bind("<Configure>", self._remember_window_geometry, add="+")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         # 先讓視窗以一般大小完成第一次繪製，再最大化：一方面避免最大化動畫途中
         # 內容尚未畫出而露出空白背景，另一方面在真正變成最大化尺寸後，強制把
-        # scrollregion 與捲動位置重新校正到最上方，避免出現「明明沒往下捲，
-        # 卻可以往上捲出空白」的殘留捲動位移。
+        # 捲動位置重新校正到最上方，避免出現「明明沒往下捲，卻可以往上捲出空白」
+        # 的殘留捲動位移。
         self.after(10, self._settle_window_and_reset_scroll)
 
     # ── 視窗幾何：還原 / 記錄 / 存檔 ────────────────────
+    def _logical_to_physical(self, value):
+        """把 CTk 的邏輯像素換算成 Win32 API 要的實體像素。
+
+        CustomTkinter 開啟了 DPI awareness，CTk.geometry() 取得/設定的都是邏輯像素；
+        MonitorFromPoint 吃的是實體像素。螢幕縮放 100% 時係數為 1，兩者相同。
+        """
+        try:
+            return int(value * ctk.ScalingTracker.get_window_scaling(self))
+        except Exception:
+            return int(value)
+
     def _restore_window_geometry(self):
         win = self.settings.get("window") or {}
         w, h = win.get("width"), win.get("height")
@@ -295,7 +446,10 @@ class GPSApp(tk.Tk):
         if not isinstance(w, int) or not isinstance(h, int) or w < MIN_WINDOW_W or h < MIN_WINDOW_H:
             w, h = DEFAULT_WINDOW_W, DEFAULT_WINDOW_H
         # 拿標題列中間的點去問「這個位置還在哪台螢幕上」，比左上角不容易壓在螢幕邊界上。
-        if isinstance(x, int) and isinstance(y, int) and point_on_any_monitor(x + w // 2, y + 15):
+        on_monitor = (isinstance(x, int) and isinstance(y, int)
+                      and point_on_any_monitor(self._logical_to_physical(x + w // 2),
+                                               self._logical_to_physical(y + 15)))
+        if on_monitor:
             self.geometry(f"{w}x{h}+{x}+{y}")
         else:
             x = y = None
@@ -345,86 +499,68 @@ class GPSApp(tk.Tk):
         if self._start_maximized:
             self.state("zoomed")
         self.update_idletasks()
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        self.canvas.yview_moveto(0)
+        canvas = getattr(self.scroll_frame, "_parent_canvas", None)
+        if canvas is not None:
+            canvas.yview_moveto(0)
         self._update_scrollbar_visibility()
         self._update_log_height()
-        if hasattr(self, "route_container"):
-            self._update_route_table_height()
-
-    def _content_fits(self, target_canvas=None):
-        target_canvas = target_canvas or self.canvas
-        bbox = target_canvas.bbox("all")
-        content_h = (bbox[3] - bbox[1]) if bbox else 0
-        return content_h <= target_canvas.winfo_height()
+        self._update_route_table_height()
 
     def _update_scrollbar_visibility(self):
-        if self._content_fits():
-            if self.scrollbar.winfo_ismapped():
-                self.scrollbar.pack_forget()
-        else:
-            if not self.scrollbar.winfo_ismapped():
-                self.scrollbar.pack(side="right", fill="y")
+        set_scrollbar_visibility(self.scroll_frame)
 
-    def _widget_is_descendant(self, widget, ancestor):
-        w = widget
-        while w is not None:
-            if w == ancestor:
-                return True
-            w = getattr(w, "master", None)
-        return False
+    def _physical_to_widget_units(self, pixels):
+        """把實際螢幕像素換算回 CTk 的 width/height 參數單位。
 
-    def _scroll_canvas(self, target_canvas, event):
-        if self._content_fits(target_canvas):
-            return
-        target_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        top, bottom = target_canvas.yview()
-        if top < 0:
-            target_canvas.yview_moveto(0)
-        elif bottom > 1:
-            target_canvas.yview_moveto(1 - (bottom - top))
+        CTk 的 width/height 會先乘上 widget scaling 才套到底層 widget，但
+        winfo_reqheight() 與 <Configure> 的 event.height 拿到的已經是縮放後的
+        實際像素。直接把後者餵回 configure(height=...) 會被二次縮放，UI_SCALE
+        或螢幕 DPI 不是 1 時就會明顯過高。
+        """
+        try:
+            scaling = ctk.ScalingTracker.get_widget_scaling(self)
+        except Exception:
+            scaling = 1.0
+        return pixels / scaling if scaling else pixels
+
+    def _log_line_height(self):
+        """日誌字型一行的高度（widget 單位）。
+
+        用未縮放的字級去問 Tk，拿到的就是 widget 單位的行高，可以直接跟
+        configure(height=...) 的數值相加減。量一次就快取，不必每次 resize 重算。
+        """
+        if self._log_line_h is None:
+            self._log_line_h = tkfont.Font(family=FONT_MONO,
+                                           size=FS_SM).metrics("linespace")
+        return self._log_line_h
 
     def _update_log_height(self, window_height=None):
-        if not hasattr(self, "log_frame"):
+        if not hasattr(self, "log"):
             return
         if window_height is None:
             window_height = self.container.winfo_height()
-        self.log_frame.configure(height=max(80, int(window_height * 0.4)))
+        target = self._physical_to_widget_units(window_height * 0.4)
+        target -= LOG_SHRINK_LINES * self._log_line_height()
+        self.log.configure(height=max(80, int(target)))
 
     def _build_scroll_container(self):
-        self.container = tk.Frame(self, bg=BG)
+        """建立整個視窗的可捲動容器。
+
+        CTkScrollableFrame 已內建 Canvas + 捲軸 + 滾輪事件（含巢狀捲動判定：游標在
+        路線表格那層時只捲內層），所以舊版那一整套手刻 Canvas 管線都不需要了。
+        """
+        self.container = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
         self.container.pack(fill="both", expand=True)
-        self.container.bind("<Configure>", lambda e: self._update_log_height(e.height))
+        self.container.bind("<Configure>", self._on_container_configure)
 
-        canvas = tk.Canvas(self.container, bg=BG, highlightthickness=0)
-        self.canvas = canvas
-        self.scrollbar = ttk.Scrollbar(self.container, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=self.scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        # 捲軸是否顯示由 _update_scrollbar_visibility() 依內容高度動態決定，
-        # 這裡先不 pack。
+        self.scroll_frame = ctk.CTkScrollableFrame(self.container, fg_color=BG,
+                                                   corner_radius=0)
+        self.scroll_frame.pack(fill="both", expand=True)
 
-        self.scroll_frame = tk.Frame(canvas, bg=BG)
-        frame_id = canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
-
-        def _on_frame_configure(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            self._update_scrollbar_visibility()
-        self.scroll_frame.bind("<Configure>", _on_frame_configure)
-
-        def _on_canvas_configure(event):
-            canvas.itemconfig(frame_id, width=event.width)
-            self._apply_responsive_layout(event.width)
-            self._update_scrollbar_visibility()
-        canvas.bind("<Configure>", _on_canvas_configure)
-
-        def _on_mousewheel(event):
-            if hasattr(self, "route_container") and hasattr(self, "route_canvas") and \
-                    self._widget_is_descendant(event.widget, self.route_container):
-                self._scroll_canvas(self.route_canvas, event)
-            else:
-                self._scroll_canvas(canvas, event)
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    def _on_container_configure(self, event):
+        self._update_log_height(event.height)
+        self._apply_responsive_layout(event.width)
+        self._update_scrollbar_visibility()
 
     def _apply_responsive_layout(self, width):
         if not hasattr(self, "left_col"):
@@ -446,108 +582,85 @@ class GPSApp(tk.Tk):
         return "☀  切換淺色" if self.theme_name == "dark" else "🌙  切換深色"
 
     def _toggle_theme(self):
-        pin_lat_val = self.pin_lat.get()
-        pin_lon_val = self.pin_lon.get()
-        speed_val = self.speed_var.get()
-        loop_val = self.loop_var.get()
-        mode_val = self.mode.get()
+        """切換深色／淺色。
 
+        所有 widget 的顏色都是 (淺色, 深色) tuple，set_appearance_mode() 會讓
+        CustomTkinter 自己把每個已建立的 widget 重畫成另一組色，因此不需要像
+        舊版那樣銷毀重建整個 UI，也就不必暫存／還原使用者正在輸入的欄位。
+        """
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
-        apply_theme(self.theme_name)
+        ctk.set_appearance_mode(self.theme_name)
+        self.theme_btn.configure(text=self._theme_btn_text())
         self.settings["theme"] = self.theme_name
         # 不直接 save_settings()：那樣寫回去的 "window" 會是啟動時讀進來的舊值，
         # 改呼叫 _save_window_geometry() 順手把目前的視窗位置一起存下去。
         self._save_window_geometry()
 
-        self.configure(bg=BG)
-        self.container.destroy()
-        self._layout_wide = None
-        self._build_scroll_container()
-        self._build_ui()
-
-        self.pin_lat.set(pin_lat_val)
-        self.pin_lon.set(pin_lon_val)
-        self.speed_var.set(speed_val)
-        self.loop_var.set(loop_val)
-        self._switch_mode(mode_val)
-        self._update_info()
-
-        self.update_idletasks()
-        self._apply_responsive_layout(self.winfo_width())
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        self.canvas.yview_moveto(0)
-        self._update_scrollbar_visibility()
-        self._update_route_table_height()
-
     def _build_ui(self):
         # ── 標題 ──
-        title_frame = tk.Frame(self.scroll_frame, bg=BG, pady=20)
-        title_frame.pack(fill="x", padx=30)
+        title_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+        title_frame.pack(fill="x", padx=30, pady=20)
 
-        tk.Label(title_frame, text="📍", font=("Segoe UI Emoji", 28),
-                 bg=BG, fg=ACCENT).pack(side="left")
-        title_col = tk.Frame(title_frame, bg=BG)
+        ctk.CTkLabel(title_frame, text="📍", font=(FONT_EMOJI, FS_EMOJI_LG),
+                     text_color=ACCENT, fg_color="transparent").pack(side="left")
+        title_col = ctk.CTkFrame(title_frame, fg_color="transparent")
         title_col.pack(side="left", padx=12)
-        tk.Label(title_col, text="GPS 路線模擬器",
-                 font=("Segoe UI", 20, "bold"), bg=BG, fg=TEXT).pack(anchor="w")
-        tk.Label(title_col, text="iPhone iOS 26  ·  需先執行 tunneld",
-                 font=("Segoe UI", 10), bg=BG, fg=TEXT2).pack(anchor="w")
+        ctk.CTkLabel(title_col, text="GPS 路線模擬器",
+                     font=(FONT, FS_TITLE, "bold"), text_color=TEXT,
+                     fg_color="transparent").pack(anchor="w")
+        ctk.CTkLabel(title_col, text="iPhone iOS 26  ·  需先執行 tunneld",
+                     font=(FONT, FS_MD), text_color=TEXT2,
+                     fg_color="transparent").pack(anchor="w")
 
-        self.theme_btn = tk.Button(title_frame, text=self._theme_btn_text(),
-                                    font=("Segoe UI", 10, "bold"),
-                                    bg=BG3, fg=TEXT, relief="flat",
-                                    padx=14, pady=8, cursor="hand2",
-                                    command=self._toggle_theme)
+        self.theme_btn = ctk.CTkButton(title_frame, text=self._theme_btn_text(),
+                                       font=(FONT, FS_MD, "bold"),
+                                       fg_color=BG3, text_color=TEXT, hover_color=HOVER,
+                                       corner_radius=BTN_RADIUS,
+                                       width=1, height=34, border_spacing=12,
+                                       command=self._toggle_theme)
         self.theme_btn.pack(side="right", padx=(0, 4))
 
         # ── 內容分欄（>1000px 寬時左右並排且等寬，否則上下堆疊）──
-        columns_frame = tk.Frame(self.scroll_frame, bg=BG)
+        columns_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
         columns_frame.pack(fill="both", expand=True)
         columns_frame.columnconfigure(0, weight=1, uniform="cols")
         columns_frame.columnconfigure(1, weight=1, uniform="cols")
 
-        self.left_col = tk.Frame(columns_frame, bg=BG)
-        self.right_col = tk.Frame(columns_frame, bg=BG)
+        self.left_col = ctk.CTkFrame(columns_frame, fg_color="transparent")
+        self.right_col = ctk.CTkFrame(columns_frame, fg_color="transparent")
 
-        # ── 控制按鈕（左欄，兩顆按鈕等寬並填滿整列）──
-        btn_frame = tk.Frame(self.left_col, bg=BG, pady=8)
-        btn_frame.pack(fill="x")
+        # ── 控制按鈕（左欄，三顆按鈕等寬並填滿整列）──
+        btn_frame = ctk.CTkFrame(self.left_col, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=8)
         btn_frame.columnconfigure(0, weight=1, uniform="ctrl_btns")
         btn_frame.columnconfigure(1, weight=1, uniform="ctrl_btns")
         btn_frame.columnconfigure(2, weight=1, uniform="ctrl_btns")
 
-        self.start_btn = tk.Button(btn_frame, text="▶  開始模擬",
-                                   font=("Segoe UI", 13, "bold"),
-                                   bg=ACCENT, fg=TEXT_ON_ACCENT, relief="flat",
-                                   padx=30, pady=12, cursor="hand2",
-                                   command=self._start)
+        self.start_btn = ctk.CTkButton(btn_frame, text="▶  開始模擬",
+                                       font=(FONT, FS_XL, "bold"), **BTN_PRIMARY,
+                                       corner_radius=BTN_RADIUS, width=1, height=48,
+                                       command=self._start)
         self.start_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
-        self.return_btn = tk.Button(btn_frame, text="↩  返回",
-                                    font=("Segoe UI", 13, "bold"),
-                                    bg=BG3, fg=TEXT, relief="flat",
-                                    padx=30, pady=12, cursor="hand2",
-                                    state="disabled",
-                                    command=self._reverse)
+        self.return_btn = ctk.CTkButton(btn_frame, text="↩  返回",
+                                        font=(FONT, FS_XL, "bold"),
+                                        fg_color=BG3, text_color=TEXT, hover_color=HOVER,
+                                        corner_radius=BTN_RADIUS, width=1, height=48,
+                                        command=self._reverse)
         self.return_btn.grid(row=0, column=1, sticky="ew", padx=4)
 
-        self.stop_btn = tk.Button(btn_frame, text="⏹  停止",
-                                  font=("Segoe UI", 13, "bold"),
-                                  bg=DANGER, fg=TEXT_ON_ACCENT, relief="flat",
-                                  padx=30, pady=12, cursor="hand2",
-                                  state="disabled",
-                                  command=self._stop)
+        self.stop_btn = ctk.CTkButton(btn_frame, text="⏹  停止",
+                                      font=(FONT, FS_XL, "bold"), **BTN_STOP,
+                                      corner_radius=BTN_RADIUS, width=1, height=48,
+                                      command=self._stop)
         self.stop_btn.grid(row=0, column=2, sticky="ew", padx=(4, 0))
 
         # ── 恢復真實定位（獨立按鈕，與開始/返回/停止的流程無關）──
-        restore_frame = tk.Frame(self.left_col, bg=BG)
-        restore_frame.pack(fill="x", pady=(0, 4))
-        self.restore_btn = tk.Button(restore_frame, text="🛰  恢復真實定位",
-                                     font=("Segoe UI", 10, "bold"),
-                                     bg=BG3, fg=TEXT2, relief="flat",
-                                     padx=20, pady=8, cursor="hand2",
-                                     command=self._restore_real_location)
-        self.restore_btn.pack(fill="x")
+        self.restore_btn = ctk.CTkButton(self.left_col, text="🛰  恢復真實定位",
+                                         font=(FONT, FS_MD, "bold"), **BTN_SECONDARY,
+                                         corner_radius=BTN_RADIUS, width=1, height=36,
+                                         command=self._restore_real_location)
+        self.restore_btn.pack(fill="x", pady=(0, 4))
 
         # 登記每顆控制按鈕「啟用時」該用的顏色，_set_btn_enabled() 會據此還原；
         # 停用時的背景／文字色則統一由 DISABLED_BG / DISABLED_TEXT 決定。
@@ -558,126 +671,111 @@ class GPSApp(tk.Tk):
             (self.restore_btn, BG3, TEXT2),
         ):
             btn.enabled_bg, btn.enabled_fg = on_bg, on_fg
-            btn.config(disabledforeground=DISABLED_TEXT)
         self._sync_btn_states()
 
         # ── 進度條（左欄）──
+        # CTkProgressBar 的值域是 0~1（不是百分比），progress_var 一律存小數。
         self.progress_var = tk.DoubleVar(value=0)
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("GPS.Horizontal.TProgressbar",
-                        troughcolor=BG3, background=ACCENT,
-                        bordercolor=BG3, lightcolor=ACCENT,
-                        darkcolor=ACCENT, thickness=8)
-        self.progress_bar = ttk.Progressbar(self.left_col, variable=self.progress_var,
-                                             maximum=100, length=660,
-                                             style="GPS.Horizontal.TProgressbar")
+        self.progress_bar = ctk.CTkProgressBar(self.left_col, variable=self.progress_var,
+                                               height=8, corner_radius=4,
+                                               fg_color=BG3, progress_color=ACCENT)
         self.progress_bar.pack(fill="x", pady=8)
 
-        self.progress_label = tk.Label(self.left_col, text="",
-                                       font=("Segoe UI", 10), bg=BG, fg=TEXT2)
+        self.progress_label = ctk.CTkLabel(self.left_col, text="",
+                                           font=(FONT, FS_MD), text_color=TEXT2,
+                                           fg_color="transparent")
         self.progress_label.pack()
 
         # ── 日誌（左欄，高度固定為視窗高度的 40%）──
-        tk.Label(self.left_col, text="執行日誌", font=("Segoe UI", 10, "bold"),
-                 bg=BG, fg=TEXT2).pack(anchor="w", pady=(12, 2))
-        self.log_frame = tk.Frame(self.left_col, bg=BG)
-        self.log_frame.pack(fill="x", pady=(0, 20))
-        self.log_frame.pack_propagate(False)
-        self.log = scrolledtext.ScrolledText(self.log_frame,
-                                              font=("Consolas", 9),
-                                              bg=BG2, fg=TEXT2,
-                                              insertbackground=ACCENT,
-                                              relief="flat", bd=0,
-                                              state="disabled")
-        self.log.pack(fill="both", expand=True)
+        ctk.CTkLabel(self.left_col, text="執行日誌", font=(FONT, FS_MD, "bold"),
+                     text_color=TEXT2, fg_color="transparent").pack(anchor="w", pady=(12, 2))
+        self.log = ctk.CTkTextbox(self.left_col, font=(FONT_MONO, FS_SM),
+                                  fg_color=BG2, text_color=TEXT2,
+                                  corner_radius=CARD_RADIUS, state="disabled")
+        self.log.pack(fill="x", pady=(0, 20))
         self._update_log_height()
 
         # ── 最愛地點面板（左欄）──
-        self.fav_frame = tk.Frame(self.left_col, bg=BG2, padx=20, pady=14)
-        self.fav_frame.pack(fill="x", pady=(0, 8))
+        fav_card, self.fav_frame = make_card(self.left_col, padx=20, pady=14)
+        fav_card.pack(fill="x", pady=(0, 8))
 
-        fav_title_row = tk.Frame(self.fav_frame, bg=BG2)
+        fav_title_row = ctk.CTkFrame(self.fav_frame, fg_color="transparent")
         fav_title_row.pack(fill="x", pady=(0, 10))
-        tk.Label(fav_title_row, text="⭐ 最愛地點",
-                 font=("Segoe UI", 11, "bold"), bg=BG2, fg=TEXT).pack(side="left")
+        ctk.CTkLabel(fav_title_row, text="⭐ 最愛地點",
+                     font=(FONT, FS_LG, "bold"), text_color=TEXT,
+                     fg_color="transparent").pack(side="left")
 
         # 儲存目前定位按鈕
-        save_pin_btn = tk.Button(fav_title_row, text="＋ 儲存目前座標",
-                                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT2,
-                                  relief="flat", padx=10, pady=4, cursor="hand2",
-                                  command=self._save_current_pin_as_fav)
-        save_pin_btn.pack(side="right", padx=(4, 0))
+        ctk.CTkButton(fav_title_row, text="＋ 儲存目前座標",
+                      font=(FONT, FS_SM), **BTN_SUCCESS,
+                      corner_radius=BTN_RADIUS, width=1, height=26, border_spacing=8,
+                      command=self._save_current_pin_as_fav).pack(side="right", padx=(4, 0))
 
-        save_route_btn = tk.Button(fav_title_row, text="＋ 儲存目前路線",
-                                    font=("Segoe UI", 9), bg=BG3, fg=TEXT2,
-                                    relief="flat", padx=10, pady=4, cursor="hand2",
-                                    command=self._save_current_route_as_fav)
-        save_route_btn.pack(side="right", padx=4)
+        ctk.CTkButton(fav_title_row, text="＋ 儲存目前路線",
+                      font=(FONT, FS_SM), **BTN_SECONDARY,
+                      corner_radius=BTN_RADIUS, width=1, height=26, border_spacing=8,
+                      command=self._save_current_route_as_fav).pack(side="right", padx=4)
 
         # 匯入 KML 檔案產生路線最愛按鈕
-        import_kml_btn = tk.Button(fav_title_row, text="＋ 匯入 KML 路線",
-                                    font=("Segoe UI", 9), bg=BG3, fg=TEXT2,
-                                    relief="flat", padx=10, pady=4, cursor="hand2",
-                                    command=self._import_kml_as_fav)
-        import_kml_btn.pack(side="right", padx=4)
+        ctk.CTkButton(fav_title_row, text="＋ 匯入 KML 路線",
+                      font=(FONT, FS_SM), **BTN_SECONDARY,
+                      corner_radius=BTN_RADIUS, width=1, height=26, border_spacing=8,
+                      command=self._import_kml_as_fav).pack(side="right", padx=4)
 
         # 最愛列表
-        self.fav_list_frame = tk.Frame(self.fav_frame, bg=BG2)
+        self.fav_list_frame = ctk.CTkFrame(self.fav_frame, fg_color="transparent")
         self.fav_list_frame.pack(fill="x")
         self._refresh_fav_list()
 
         # ── 模式切換（右欄）──
-        mode_frame = tk.Frame(self.right_col, bg=BG2, padx=20, pady=12)
-        mode_frame.pack(fill="x", pady=(0, 8))
+        mode_card, mode_frame = make_card(self.right_col, padx=20, pady=12)
+        mode_card.pack(fill="x", pady=(0, 8))
 
-        tk.Label(mode_frame, text="模式選擇", font=("Segoe UI", 11, "bold"),
-                 bg=BG2, fg=TEXT).pack(side="left", padx=(0, 16))
+        ctk.CTkLabel(mode_frame, text="模式選擇", font=(FONT, FS_LG, "bold"),
+                     text_color=TEXT, fg_color="transparent").pack(side="left", padx=(0, 16))
 
-        self.route_mode_btn = tk.Button(mode_frame, text="🗺  路線移動",
-                                        font=("Segoe UI", 10, "bold"),
-                                        bg=ACCENT, fg=TEXT_ON_ACCENT, relief="flat",
-                                        padx=16, pady=6, cursor="hand2",
-                                        command=lambda: self._switch_mode("route"))
+        self.route_mode_btn = ctk.CTkButton(mode_frame, text="🗺  路線移動",
+                                            font=(FONT, FS_MD, "bold"), **BTN_PRIMARY,
+                                            corner_radius=BTN_RADIUS,
+                                            width=1, height=32, border_spacing=14,
+                                            command=lambda: self._switch_mode("route"))
         self.route_mode_btn.pack(side="left", padx=4)
 
-        self.pin_mode_btn = tk.Button(mode_frame, text="📌  固定定位",
-                                      font=("Segoe UI", 10, "bold"),
-                                      bg=BG3, fg=TEXT2, relief="flat",
-                                      padx=16, pady=6, cursor="hand2",
-                                      command=lambda: self._switch_mode("pin"))
+        self.pin_mode_btn = ctk.CTkButton(mode_frame, text="📌  固定定位",
+                                          font=(FONT, FS_MD, "bold"), **BTN_SECONDARY,
+                                          corner_radius=BTN_RADIUS,
+                                          width=1, height=32, border_spacing=14,
+                                          command=lambda: self._switch_mode("pin"))
         self.pin_mode_btn.pack(side="left", padx=4)
 
         # ── 固定定位面板（預設隱藏，右欄）──
-        self.pin_frame = tk.Frame(self.right_col, bg=BG2, padx=20, pady=16)
+        self.pin_frame, pin_body = make_card(self.right_col, padx=20, pady=16)
 
-        tk.Label(self.pin_frame, text="固定座標",
-                 font=("Segoe UI", 11, "bold"), bg=BG2, fg=TEXT).grid(
-                 row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        ctk.CTkLabel(pin_body, text="固定座標",
+                     font=(FONT, FS_LG, "bold"), text_color=TEXT,
+                     fg_color="transparent").grid(row=0, column=0, columnspan=4,
+                                                  sticky="w", pady=(0, 10))
 
-        tk.Label(self.pin_frame, text="緯度：", font=("Segoe UI", 10),
-                 bg=BG2, fg=TEXT2).grid(row=1, column=0, sticky="w")
+        ctk.CTkLabel(pin_body, text="緯度：", font=(FONT, FS_MD),
+                     text_color=TEXT2, fg_color="transparent").grid(row=1, column=0, sticky="w")
         self.pin_lat = tk.StringVar(value="24.1368")
-        tk.Entry(self.pin_frame, textvariable=self.pin_lat, width=16,
-                 font=("Segoe UI", 11), bg=BG3, fg=TEXT,
-                 insertbackground=ACCENT, relief="flat", bd=4).grid(
-                 row=1, column=1, padx=8)
+        ctk.CTkEntry(pin_body, textvariable=self.pin_lat, width=140, height=30,
+                     font=(FONT, FS_LG), fg_color=BG3, text_color=TEXT,
+                     border_width=0, corner_radius=6).grid(row=1, column=1, padx=8)
 
-        tk.Label(self.pin_frame, text="經度：", font=("Segoe UI", 10),
-                 bg=BG2, fg=TEXT2).grid(row=1, column=2, sticky="w")
+        ctk.CTkLabel(pin_body, text="經度：", font=(FONT, FS_MD),
+                     text_color=TEXT2, fg_color="transparent").grid(row=1, column=2, sticky="w")
         self.pin_lon = tk.StringVar(value="120.6862")
-        tk.Entry(self.pin_frame, textvariable=self.pin_lon, width=16,
-                 font=("Segoe UI", 11), bg=BG3, fg=TEXT,
-                 insertbackground=ACCENT, relief="flat", bd=4).grid(
-                 row=1, column=3, padx=8)
+        ctk.CTkEntry(pin_body, textvariable=self.pin_lon, width=140, height=30,
+                     font=(FONT, FS_LG), fg_color=BG3, text_color=TEXT,
+                     border_width=0, corner_radius=6).grid(row=1, column=3, padx=8)
 
         # 預設地點快速選擇
-        pin_presets_label = tk.Frame(self.pin_frame, bg=BG2)
-        pin_presets_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(12, 4))
-        tk.Label(pin_presets_label, text="快速選擇：",
-                 font=("Segoe UI", 9), bg=BG2, fg=TEXT2).pack(side="left")
+        ctk.CTkLabel(pin_body, text="快速選擇：", font=(FONT, FS_SM),
+                     text_color=TEXT2, fg_color="transparent").grid(
+                     row=2, column=0, columnspan=4, sticky="w", pady=(12, 4))
 
-        pin_presets_btns = tk.Frame(self.pin_frame, bg=BG2)
+        pin_presets_btns = ctk.CTkFrame(pin_body, fg_color="transparent")
         pin_presets_btns.grid(row=3, column=0, columnspan=4, sticky="w")
         pin_presets = [
             ("台中火車站", 24.1368, 120.6862),
@@ -686,110 +784,100 @@ class GPSApp(tk.Tk):
             ("台南孔廟",   22.9969, 120.2008),
         ]
         for name, lat, lon in pin_presets:
-            btn = tk.Button(pin_presets_btns, text=name,
-                            font=("Segoe UI", 9),
-                            bg=BG3, fg=TEXT2, relief="flat",
-                            padx=10, pady=5, cursor="hand2",
-                            command=lambda la=lat, lo=lon: (
-                                self.pin_lat.set(str(la)),
-                                self.pin_lon.set(str(lo))
-                            ))
-            btn.pack(side="left", padx=4)
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=HOVER, fg=TEXT_ON_ACCENT2))
-            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
+            ctk.CTkButton(pin_presets_btns, text=name, font=(FONT, FS_SM),
+                          **BTN_SECONDARY, corner_radius=BTN_RADIUS,
+                          width=1, height=28, border_spacing=8,
+                          command=lambda la=lat, lo=lon: (
+                              self.pin_lat.set(str(la)),
+                              self.pin_lon.set(str(lo))
+                          )).pack(side="left", padx=4)
 
         # ── 速度設定 ──
-        speed_frame = tk.Frame(self.right_col, bg=BG2, padx=20, pady=16)
-        speed_frame.pack(fill="x", pady=(0, 12))
-        self.speed_frame_ref = speed_frame
+        self.speed_frame_ref, speed_frame = make_card(self.right_col, padx=20, pady=16)
+        self.speed_frame_ref.pack(fill="x", pady=(0, 12))
 
-        tk.Label(speed_frame, text="移動速度", font=("Segoe UI", 11, "bold"),
-                 bg=BG2, fg=TEXT).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(speed_frame, text="移動速度", font=(FONT, FS_LG, "bold"),
+                     text_color=TEXT, fg_color="transparent").grid(row=0, column=0, sticky="w")
 
         self.speed_var = tk.DoubleVar(value=20.0)
         presets = [("步行 5 km/h", 5), ("慢跑 10 km/h", 10),
                    ("騎車 20 km/h", 20), ("開車 40 km/h", 40)]
 
-        preset_frame = tk.Frame(speed_frame, bg=BG2)
+        preset_frame = ctk.CTkFrame(speed_frame, fg_color="transparent")
         preset_frame.grid(row=1, column=0, sticky="w", pady=8)
         for label, val in presets:
-            btn = tk.Button(preset_frame, text=label,
-                            font=("Segoe UI", 9),
-                            bg=BG3, fg=TEXT2, relief="flat",
-                            padx=10, pady=5, cursor="hand2",
-                            command=lambda v=val: self._set_speed(v))
-            btn.pack(side="left", padx=4)
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=HOVER, fg=TEXT_ON_ACCENT2))
-            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BG3, fg=TEXT2))
+            ctk.CTkButton(preset_frame, text=label, font=(FONT, FS_SM),
+                          **BTN_SECONDARY, corner_radius=BTN_RADIUS,
+                          width=1, height=28, border_spacing=8,
+                          command=lambda v=val: self._set_speed(v)).pack(side="left", padx=4)
 
-        speed_row = tk.Frame(speed_frame, bg=BG2)
+        speed_row = ctk.CTkFrame(speed_frame, fg_color="transparent")
         speed_row.grid(row=2, column=0, sticky="w")
-        tk.Label(speed_row, text="自訂 km/h：", font=("Segoe UI", 10),
-                 bg=BG2, fg=TEXT2).pack(side="left")
-        self.speed_entry = tk.Entry(speed_row, textvariable=self.speed_var,
-                                    width=8, font=("Segoe UI", 11),
-                                    bg=BG3, fg=TEXT, insertbackground=ACCENT,
-                                    relief="flat", bd=4)
+        ctk.CTkLabel(speed_row, text="自訂 km/h：", font=(FONT, FS_MD),
+                     text_color=TEXT2, fg_color="transparent").pack(side="left")
+        self.speed_entry = ctk.CTkEntry(speed_row, textvariable=self.speed_var,
+                                        width=80, height=30, font=(FONT, FS_LG),
+                                        fg_color=BG3, text_color=TEXT,
+                                        border_width=0, corner_radius=6)
         self.speed_entry.pack(side="left", padx=6)
 
         self.loop_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(speed_row, text="循環模式（來回）",
-                       variable=self.loop_var,
-                       font=("Segoe UI", 10), bg=BG2, fg=TEXT2,
-                       selectcolor=BG3, activebackground=BG2,
-                       activeforeground=TEXT).pack(side="left", padx=16)
+        ctk.CTkCheckBox(speed_row, text="循環模式（來回）",
+                        variable=self.loop_var,
+                        font=(FONT, FS_MD), text_color=TEXT2,
+                        fg_color=ACCENT, hover_color=HOVER,
+                        border_color=BG3, checkmark_color=TEXT_ON_ACCENT,
+                        checkbox_width=18, checkbox_height=18,
+                        corner_radius=4).pack(side="left", padx=16)
 
         # ── 路線點 ──
-        self.route_section = tk.Frame(self.right_col, bg=BG)
-        self.route_section.pack(fill="x", padx=0)
+        self.route_section = ctk.CTkFrame(self.right_col, fg_color="transparent")
+        self.route_section.pack(fill="x")
 
-        route_label_frame = tk.Frame(self.route_section, bg=BG)
-        route_label_frame.pack(fill="x", padx=0, pady=(4, 4))
-        tk.Label(route_label_frame, text="路線座標點",
-                 font=("Segoe UI", 11, "bold"), bg=BG, fg=TEXT).pack(side="left")
-        tk.Button(route_label_frame, text="🗑 清空座標點",
-                  font=("Segoe UI", 9), bg=BG3, fg=TEXT2,
-                  relief="flat", padx=10, pady=3, cursor="hand2",
-                  command=self._clear_route_points).pack(side="right")
-        tk.Button(route_label_frame, text="＋ 新增點",
-                  font=("Segoe UI", 9), bg=ACCENT2, fg=TEXT_ON_ACCENT2,
-                  relief="flat", padx=10, pady=3, cursor="hand2",
-                  command=self._add_point).pack(side="right")
+        route_label_frame = ctk.CTkFrame(self.route_section, fg_color="transparent")
+        route_label_frame.pack(fill="x", pady=(4, 4))
+        ctk.CTkLabel(route_label_frame, text="路線座標點",
+                     font=(FONT, FS_LG, "bold"), text_color=TEXT,
+                     fg_color="transparent").pack(side="left")
+        ctk.CTkButton(route_label_frame, text="🗑 清空座標點", font=(FONT, FS_SM),
+                      **BTN_SECONDARY, corner_radius=BTN_RADIUS,
+                      width=1, height=24, border_spacing=8,
+                      command=self._clear_route_points).pack(side="right")
+        ctk.CTkButton(route_label_frame, text="＋ 新增點", font=(FONT, FS_SM),
+                      **BTN_SUCCESS, corner_radius=BTN_RADIUS,
+                      width=1, height=24, border_spacing=8,
+                      command=self._add_point).pack(side="right", padx=4)
         # 距離/時間資訊：與「＋ 新增點」同一列
-        self.info_label = tk.Label(route_label_frame, text="",
-                                   font=("Segoe UI", 10), bg=BG, fg=TEXT2)
+        self.info_label = ctk.CTkLabel(route_label_frame, text="",
+                                       font=(FONT, FS_MD), text_color=TEXT2,
+                                       fg_color="transparent")
         self.info_label.pack(side="left", padx=(16, 0))
 
-        # 路線表格
-        cols_frame = tk.Frame(self.route_section, bg=BG3)
-        cols_frame.pack(fill="x", padx=0)
-        for txt, w, exp in [("#", 4, False), ("緯度", 10, False), ("經度", 10, False),
-                            ("備註", 10, True), ("", 6, False)]:
-            tk.Label(cols_frame, text=txt, font=("Segoe UI", 9),
-                     bg=BG3, fg=TEXT2, width=w, anchor="w",
-                     padx=6, pady=4).pack(side="left", fill="x", expand=exp)
+        # 路線表格表頭
+        cols_frame = ctk.CTkFrame(self.route_section, fg_color=BG3, corner_radius=0)
+        cols_frame.pack(fill="x")
+        header_cols = [("#", ROUTE_COL_INDEX_W, False), ("緯度", ROUTE_COL_COORD_W, False),
+                       ("經度", ROUTE_COL_COORD_W, False), ("備註", ROUTE_COL_COORD_W, True),
+                       ("", ROUTE_COL_DEL_W, False)]
+        for txt, w, exp in header_cols:
+            ctk.CTkLabel(cols_frame, text=txt, font=(FONT, FS_SM),
+                         text_color=TEXT2, fg_color="transparent",
+                         width=w, height=24, anchor="w").pack(side="left", fill="x",
+                                                              expand=exp, padx=(6, 0))
 
-        # 表格內容區：用一個小型 canvas 包住，最多顯示 ROUTE_TABLE_MAX_ROWS 列，
-        # 超過時才出現右側捲軸（同樣依內容自動顯示/隱藏）。
-        route_table_wrap = tk.Frame(self.route_section, bg=BG2)
-        route_table_wrap.pack(fill="x", padx=0)
+        # 表格內容區：獨立的內層 CTkScrollableFrame，最多顯示 ROUTE_TABLE_MAX_ROWS 列。
+        # CustomTkinter 的滾輪處理會自己判斷游標在哪一層（_check_if_valid_scroll 比對
+        # _parent_canvas），所以巢狀捲動不需要像舊版那樣手動分派事件。
+        self.route_container = ctk.CTkScrollableFrame(self.route_section,
+                                                      fg_color=BG2, corner_radius=0)
+        self.route_container.pack(fill="x")
 
-        self.route_canvas = tk.Canvas(route_table_wrap, bg=BG2, highlightthickness=0)
-        self.route_scrollbar = ttk.Scrollbar(route_table_wrap, orient="vertical",
-                                              command=self.route_canvas.yview)
-        self.route_canvas.configure(yscrollcommand=self.route_scrollbar.set)
-        self.route_canvas.pack(side="left", fill="both", expand=True)
-
-        self.route_container = tk.Frame(self.route_canvas, bg=BG2)
-        route_frame_id = self.route_canvas.create_window((0, 0), window=self.route_container, anchor="nw")
-
-        def _on_route_frame_configure(event):
-            self.route_canvas.configure(scrollregion=self.route_canvas.bbox("all"))
-        self.route_container.bind("<Configure>", _on_route_frame_configure)
-
-        def _on_route_canvas_configure(event):
-            self.route_canvas.itemconfig(route_frame_id, width=event.width)
-        self.route_canvas.bind("<Configure>", _on_route_canvas_configure)
+        # 列是用 place() 疊上去的，place 不會把容器撐高，所以放一個看不見的
+        # 墊片來決定內容總高度（＝捲動範圍），高度由 _refresh_route_rows() 更新。
+        self._route_spacer = ctk.CTkFrame(self.route_container,
+                                          fg_color="transparent", height=1)
+        self._route_spacer.pack(fill="x")
+        self._install_route_scroll_hook()
 
         self._refresh_route_rows()
         self._update_info()
@@ -798,40 +886,39 @@ class GPSApp(tk.Tk):
     def _switch_mode(self, mode):
         self.mode.set(mode)
         if mode == "route":
-            self.route_mode_btn.config(bg=ACCENT, fg=TEXT_ON_ACCENT)
-            self.pin_mode_btn.config(bg=BG3, fg=TEXT2)
+            self.route_mode_btn.configure(**BTN_PRIMARY)
+            self.pin_mode_btn.configure(**BTN_SECONDARY)
             self.pin_frame.pack_forget()
             self.speed_frame_ref.pack(fill="x", pady=(0, 12))
-            self.route_section.pack(fill="x", padx=0)
-            self.start_btn.config(text="▶  開始模擬")
+            self.route_section.pack(fill="x")
+            self.start_btn.configure(text="▶  開始模擬")
         else:
-            self.pin_mode_btn.config(bg=ACCENT2, fg=TEXT_ON_ACCENT2)
-            self.route_mode_btn.config(bg=BG3, fg=TEXT2)
+            self.pin_mode_btn.configure(**BTN_SUCCESS)
+            self.route_mode_btn.configure(**BTN_SECONDARY)
             self.speed_frame_ref.pack_forget()
             self.route_section.pack_forget()
             self.pin_frame.pack(fill="x", pady=(0, 8))
-            self.start_btn.config(text="📌  固定定位")
+            self.start_btn.configure(text="📌  固定定位")
         self._update_return_btn_state()
 
     def _set_btn_enabled(self, btn, enabled):
         """切換控制按鈕的可用狀態（含背景色）。
 
-        tkinter 的 state="disabled" 只會把文字換成 disabledforeground，背景色
+        CTkButton 的 state="disabled" 只會把文字換成 text_color_disabled，背景色
         完全不動，所以停用中的「停止」仍是滿版 DANGER 底，看起來比真正可按的
-        按鈕更醒目。這裡連背景一起換掉，讓停用狀態退到 BG3 之下。
+        按鈕更醒目。這裡連背景一起換掉，讓停用狀態退到 BG3 之下，並關掉 hover
+        （停用的按鈕不該對滑鼠有反應）。
         """
         if enabled:
-            btn.config(state="normal", bg=btn.enabled_bg, fg=btn.enabled_fg,
-                       cursor="hand2")
+            btn.configure(state="normal", fg_color=btn.enabled_bg,
+                          text_color=btn.enabled_fg, hover=True)
         else:
-            btn.config(state="disabled", bg=DISABLED_BG, cursor="")
+            btn.configure(state="disabled", fg_color=DISABLED_BG,
+                          text_color=DISABLED_TEXT, text_color_disabled=DISABLED_TEXT,
+                          hover=False)
 
     def _sync_btn_states(self):
-        """由 pending_action / mode 推導四顆控制按鈕的可用性。
-
-        _build_ui() 尾端會呼叫一次，因此切換主題整個重建 UI 之後，按鈕狀態
-        （以及對應的顏色）不會退回建立時的預設值。
-        """
+        """由 pending_action / mode 推導四顆控制按鈕的可用性。"""
         busy = self.pending_action in ("forward", "reverse", "disconnect")
         self._set_btn_enabled(self.start_btn, not busy)
         self._set_btn_enabled(self.stop_btn,
@@ -844,50 +931,81 @@ class GPSApp(tk.Tk):
                    and self.pending_action not in ("reverse", "disconnect"))
         self._set_btn_enabled(self.return_btn, enabled)
 
+    def _fixed_cell(self, parent, width):
+        """建立寬度不隨內容改變的欄位容器。
+
+        CTkLabel 會依文字長度自動撐寬，直接放進一列裡時，過長的文字會把同一列
+        其他欄位擠掉（最愛名稱太長時「載入」「✕」被壓變形就是這樣來的）。
+        包一層 pack_propagate(False) 的容器後，內容過長只會在容器內被裁切，
+        其他欄位的寬度不受影響。
+        """
+        cell = ctk.CTkFrame(parent, fg_color="transparent",
+                            width=width, height=FAV_ROW_H)
+        cell.pack_propagate(False)
+        return cell
+
+    def _bind_elide(self, cell, label, full_text, font):
+        """讓 label 的文字隨欄位寬度自動截斷加省略號。
+
+        名稱欄的寬度會跟著視窗寬度變，所以不能只在建立時算一次；綁在欄位容器
+        自己的 <Configure> 上，只有該欄真的改變寬度時才重算。
+        """
+        def on_configure(event):
+            avail = self._physical_to_widget_units(event.width) - 4  # 留一點右邊界
+            label.configure(text=elide_to_width(full_text, font, avail))
+        cell.bind("<Configure>", on_configure)
+
     def _refresh_fav_list(self):
         for w in self.fav_list_frame.winfo_children():
             w.destroy()
         if not self.favorites:
-            tk.Label(self.fav_list_frame, text="尚無儲存的最愛地點",
-                     font=("Segoe UI", 9), bg=BG2, fg=TEXT2,
-                     pady=6).pack(anchor="w")
+            ctk.CTkLabel(self.fav_list_frame, text="尚無儲存的最愛地點",
+                         font=(FONT, FS_SM), text_color=TEXT2,
+                         fg_color="transparent", height=24).pack(anchor="w")
             return
         for i, fav in enumerate(self.favorites):
-            row = tk.Frame(self.fav_list_frame,
-                           bg=BG3 if i % 2 == 0 else BG2)
+            row_color = BG3 if i % 2 == 0 else BG2
+            row = ctk.CTkFrame(self.fav_list_frame, fg_color=row_color,
+                               corner_radius=6, height=FAV_ROW_H)
             row.pack(fill="x", pady=1)
+            row.pack_propagate(False)  # 列高固定，不被內容撐高
 
-            # 圖示
-            icon = "📌" if fav["type"] == "pin" else "🗺"
-            tk.Label(row, text=icon, font=("Segoe UI Emoji", 10),
-                     bg=row["bg"], fg=TEXT2, width=3).pack(side="left", padx=4)
+            # 右側欄位先 pack：pack 是先到先分配空間，先放的一定拿得到自己的寬度，
+            # 名稱再長也只能吃剩下的，不會把「載入」「✕」擠變形。
+            ctk.CTkButton(row, text="✕", font=(FONT, FS_XS),
+                          fg_color="transparent", text_color=DANGER, hover_color=HOVER,
+                          corner_radius=6, width=FAV_COL_DEL_W, height=22,
+                          command=lambda i=i: self._del_fav(i)).pack(side="right", padx=(2, 6))
 
-            # 名稱（佔最大表格寬度比例）
-            tk.Label(row, text=fav["name"],
-                     font=("Segoe UI", 10, "bold"), bg=row["bg"], fg=TEXT,
-                     width=10, anchor="w").pack(side="left", fill="x", expand=True, padx=(0, 4))
+            ctk.CTkButton(row, text="載入", font=(FONT, FS_XS), **BTN_PRIMARY,
+                          corner_radius=6, width=1, height=22, border_spacing=6,
+                          command=lambda f=fav: self._load_fav(f)).pack(side="right", padx=4)
 
             # 座標預覽
             if fav["type"] == "pin":
                 preview = f"{fav['lat']:.4f}, {fav['lon']:.4f}"
             else:
                 preview = f"{len(fav['route'])} 個節點"
-            tk.Label(row, text=preview, font=("Segoe UI", 9),
-                     bg=row["bg"], fg=TEXT2, width=14, anchor="w").pack(side="left")
+            preview_cell = self._fixed_cell(row, FAV_COL_PREVIEW_W)
+            preview_cell.pack(side="right", padx=4)
+            ctk.CTkLabel(preview_cell, text=preview, font=(FONT, FS_SM),
+                         text_color=TEXT2, fg_color="transparent",
+                         anchor="w").pack(fill="both", expand=True)
 
-            # 載入按鈕
-            load_btn = tk.Button(row, text="載入",
-                                  font=("Segoe UI", 8), bg=ACCENT, fg=TEXT_ON_ACCENT,
-                                  relief="flat", padx=8, pady=2, cursor="hand2",
-                                  command=lambda f=fav: self._load_fav(f))
-            load_btn.pack(side="left", padx=4)
+            # 圖示
+            ctk.CTkLabel(row, text=icon_for(fav), font=(FONT_EMOJI, FS_EMOJI),
+                         text_color=TEXT2, fg_color="transparent",
+                         width=FAV_COL_ICON_W).pack(side="left", padx=4)
 
-            # 刪除按鈕
-            del_btn = tk.Button(row, text="✕",
-                                 font=("Segoe UI", 8), bg=row["bg"], fg=DANGER,
-                                 relief="flat", padx=6, pady=2, cursor="hand2",
-                                 command=lambda i=i: self._del_fav(i))
-            del_btn.pack(side="left", padx=2)
+            # 名稱：吃掉剩餘寬度，過長時在容器內被裁掉而不是往外撐
+            name_cell = self._fixed_cell(row, FAV_COL_NAME_MIN_W)
+            name_cell.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            name_font = (FONT, FS_MD, "bold")
+            name_label = ctk.CTkLabel(name_cell, text=fav["name"], font=name_font,
+                                      text_color=TEXT, fg_color="transparent",
+                                      anchor="w")
+            name_label.pack(fill="both", expand=True)
+            self._bind_elide(name_cell, name_label, fav["name"], name_font)
 
     def _save_current_pin_as_fav(self):
         try:
@@ -977,51 +1095,147 @@ class GPSApp(tk.Tk):
         """UI 的速度以 km/h 輸入，換算成內部計算用的 m/s。"""
         return self.speed_var.get() / 3.6
 
+    # ── 路線表格（虛擬化清單）────────────────────
+    # 表格一次最多只看得到 ROUTE_TABLE_MAX_ROWS 列，所以只建立 ROUTE_ROW_POOL 個
+    # 列 widget 重複使用，捲動時把它們重新綁到不同的資料索引並用 place() 移到
+    # 對應的高度。載入 446 個點的路線因此從 8 秒降到不到 0.1 秒。
+    def _install_route_scroll_hook(self):
+        """捲動時重新計算要顯示哪幾列。
+
+        CTkScrollableFrame 沒有對外的捲動事件，只能包住它內部 canvas 的
+        yscrollcommand（原本直接接捲軸的 set）。這裡與 set_scrollbar_visibility()
+        一樣是與 CustomTkinter 內部實作耦合的點，用 getattr + try 保護。
+        """
+        canvas = getattr(self.route_container, "_parent_canvas", None)
+        scrollbar = getattr(self.route_container, "_scrollbar", None)
+        if canvas is None or scrollbar is None:
+            return
+        try:
+            canvas.configure(yscrollcommand=lambda first, last: (
+                scrollbar.set(first, last), self._render_route_window()))
+        except Exception:
+            pass
+
+    def _make_route_row(self):
+        """建立一個可重複使用的表格列；內容留白，由 _render_route_window() 填。"""
+        row = ctk.CTkFrame(self.route_container, fg_color=BG2, corner_radius=0)
+        row.idx_label = ctk.CTkLabel(row, text="", width=ROUTE_COL_INDEX_W, height=26,
+                                     font=(FONT, FS_SM), text_color=TEXT2,
+                                     fg_color="transparent", anchor="w")
+        row.idx_label.pack(side="left", padx=(6, 0))
+        row.cell_vars, row.cell_entries = [], []
+        for j, exp in enumerate([False, False, True]):
+            var = tk.StringVar()
+            entry = ctk.CTkEntry(row, textvariable=var, width=ROUTE_COL_COORD_W, height=24,
+                                 font=(FONT, FS_SM), fg_color=BG2, text_color=TEXT,
+                                 border_width=0, corner_radius=4)
+            entry.pack(side="left", padx=2, fill="x", expand=exp)
+            var.trace_add("write",
+                          lambda *a, r=row, f=j, v=var: self._on_edit(r, f, v))
+            row.cell_vars.append(var)
+            row.cell_entries.append(entry)
+        ctk.CTkButton(row, text="✕", font=(FONT, FS_XS),
+                      fg_color="transparent", text_color=DANGER, hover_color=HOVER,
+                      corner_radius=4, width=ROUTE_COL_DEL_W, height=22,
+                      command=lambda r=row: self._del_point(r.data_index)).pack(side="left")
+        row.data_index = None  # 目前綁在哪一筆資料；None 代表這列沒在用
+        return row
+
+    def _ensure_route_rows(self):
+        if not self._route_rows:
+            self._route_rows = [self._make_route_row() for _ in range(ROUTE_ROW_POOL)]
+
+    def _route_row_height(self):
+        """單列高度（實體像素）。place() 用的是實體像素，所以這裡不換算單位。"""
+        if self._route_row_h is None:
+            self._ensure_route_rows()
+            probe = self._route_rows[0]
+            probe.place(x=0, y=0, relwidth=1)
+            self.update_idletasks()
+            self._route_row_h = max(20, probe.winfo_reqheight())
+        return self._route_row_h
+
+    def _render_route_window(self):
+        """依目前捲動位置，把列 widget 綁到對應的資料並擺到正確高度。"""
+        if self._route_rendering or not hasattr(self, "route_container"):
+            return
+        self._route_rendering = True
+        try:
+            self._ensure_route_rows()
+            total = len(self.route)
+            row_h = self._route_row_height()
+            canvas = getattr(self.route_container, "_parent_canvas", None)
+            if total <= ROUTE_ROW_POOL:
+                first = 0
+            else:
+                # canvasy(0) = 視窗頂端對應到內容的哪個 y，也就是捲動位移
+                top = canvas.canvasy(0) if canvas is not None else 0
+                first = int(max(0, top) // row_h)
+                first = max(0, min(first, total - ROUTE_ROW_POOL))
+
+            self._route_rebinding = True  # 擋掉 var.set() 觸發的 _on_edit
+            for k, row in enumerate(self._route_rows):
+                i = first + k
+                if i >= total:
+                    if row.data_index is not None:
+                        row.place_forget()
+                        row.data_index = None
+                    continue
+                row.data_index = i
+                row.idx_label.configure(text=str(i + 1))
+                row_color = BG2 if i % 2 == 0 else BG3
+                row.configure(fg_color=row_color)
+                for j, var in enumerate(row.cell_vars):
+                    text = str(self.route[i][j])
+                    if var.get() != text:
+                        var.set(text)
+                    row.cell_entries[j].configure(fg_color=row_color)
+                # 不傳 height：CTkBaseClass.place() 禁止 width/height（那是建構子的
+                # 參數，CTk 要自己套縮放）。不給的話 place 會用列的自然高度，
+                # 而那正好就是 _route_row_height() 量到的值。
+                row.place(x=0, y=i * row_h, relwidth=1)
+        finally:
+            self._route_rebinding = False
+            self._route_rendering = False
+
     def _refresh_route_rows(self):
-        for w in self.route_container.winfo_children():
-            w.destroy()
-        for i, pt in enumerate(self.route):
-            row = tk.Frame(self.route_container,
-                           bg=BG2 if i % 2 == 0 else BG3)
-            row.pack(fill="x")
-            tk.Label(row, text=str(i+1), width=4, font=("Segoe UI", 9),
-                     bg=row["bg"], fg=TEXT2, padx=6, pady=4).pack(side="left")
-            for j, (w, exp) in enumerate([(10, False), (10, False), (10, True)]):
-                var = tk.StringVar(value=str(pt[j]))
-                e = tk.Entry(row, textvariable=var, width=w,
-                             font=("Segoe UI", 9), bg=row["bg"],
-                             fg=TEXT,
-                             insertbackground=ACCENT, relief="flat", bd=2)
-                e.pack(side="left", padx=2, fill="x", expand=exp)
-                idx, field = i, j
-                var.trace_add("write", lambda *a, i=idx, f=field, v=var: self._on_edit(i, f, v))
-            tk.Button(row, text="✕", font=("Segoe UI", 8),
-                      bg=row["bg"], fg=DANGER, relief="flat",
-                      cursor="hand2", width=3,
-                      command=lambda i=i: self._del_point(i)).pack(side="left")
+        """路線資料變動後重畫表格。
+
+        只重畫看得到的那十幾列，耗時與路線長度無關；墊片高度決定捲動範圍。
+        """
+        if not hasattr(self, "route_container"):
+            return
+        self._ensure_route_rows()
+        row_h = self._route_row_height()
+        total_h = self._physical_to_widget_units(len(self.route) * row_h)
+        self._route_spacer.configure(height=max(1, int(total_h)))
+        canvas = getattr(self.route_container, "_parent_canvas", None)
+        if canvas is not None:
+            canvas.yview_moveto(0)  # 換一條路線就回到表格最上面
+        self._render_route_window()
         self._update_route_table_height()
 
     def _update_route_table_height(self):
-        rows = self.route_container.winfo_children()
-        if not rows:
+        if not hasattr(self, "route_container"):
             return
+        if not self.route:
+            self.route_container.configure(height=1)
+            return
+        row_h = self._route_row_height()
+        visible_rows = min(len(self.route), ROUTE_TABLE_MAX_ROWS)
+        self.route_container.configure(
+            height=self._physical_to_widget_units(row_h * visible_rows))
         self.update_idletasks()
-        row_h = rows[0].winfo_reqheight()
-        visible_rows = min(len(rows), ROUTE_TABLE_MAX_ROWS)
-        self.route_canvas.configure(height=row_h * visible_rows)
-        self.route_canvas.configure(scrollregion=self.route_canvas.bbox("all"))
-        self.update_idletasks()
-        if self._content_fits(self.route_canvas):
-            if self.route_scrollbar.winfo_ismapped():
-                self.route_scrollbar.pack_forget()
-        else:
-            if not self.route_scrollbar.winfo_ismapped():
-                self.route_scrollbar.pack(side="right", fill="y")
+        set_scrollbar_visibility(self.route_container)
 
-    def _on_edit(self, i, field, var):
+    def _on_edit(self, row, field, var):
+        # 換綁資料時 var.set() 也會觸發這裡，那不是使用者輸入，必須擋掉，
+        # 否則會把上一列的值寫進新綁上來的那一筆資料。
+        if self._route_rebinding or row.data_index is None:
+            return
         try:
             val = float(var.get()) if field < 2 else var.get()
-            self.route[i][field] = val
+            self.route[row.data_index][field] = val
             self._update_info()
         except ValueError:
             pass
@@ -1033,6 +1247,10 @@ class GPSApp(tk.Tk):
         self._update_info()
 
     def _del_point(self, i):
+        # 虛擬化清單裡沒綁到資料的列 data_index 是 None（正常情況下它是隱藏的、
+        # 點不到，這裡只是不讓意外的呼叫炸掉）。
+        if i is None or not (0 <= i < len(self.route)):
+            return
         if len(self.route) <= 2:
             messagebox.showwarning("警告", "至少需要 2 個路線點")
             return
@@ -1047,7 +1265,7 @@ class GPSApp(tk.Tk):
             return
         self.route = []
         self.point_idx = 0
-        self.info_label.config(text="")
+        self.info_label.configure(text="")
         self._refresh_route_rows()
         self._update_info()
 
@@ -1064,17 +1282,25 @@ class GPSApp(tk.Tk):
             secs = dist / speed if speed > 0 else 0
             mins = int(secs // 60)
             sec2 = int(secs % 60)
-            self.info_label.config(
+            self.info_label.configure(
                 text=f"總距離：{dist/1000:.2f} 公里  ·  預計時間：{mins} 分 {sec2} 秒  ·  共 {len(self.route)} 個節點"
             )
         except Exception:
             pass
 
     def _log(self, msg):
-        self.log.config(state="normal")
+        self.log.configure(state="normal")
         self.log.insert("end", msg + "\n")
         self.log.see("end")
-        self.log.config(state="disabled")
+        self.log.configure(state="disabled")
+
+    def _set_progress_label(self, text):
+        """背景執行緒要更新進度文字時，統一經由這個方法排回主執行緒。
+
+        CTkLabel 沒有 tk.Label 的 config(**dict) 用法，改用具名方法比在
+        self.after() 裡塞 dict 清楚。
+        """
+        self.progress_label.configure(text=text)
 
     def _start(self):
         if self.mode.get() == "route" and len(self.route) < 2:
@@ -1194,16 +1420,15 @@ class GPSApp(tk.Tk):
             self.point_idx = 0
             self.after(0, self._log, "✅ 已恢復真實定位")
             self.after(0, self.progress_var.set, 0)
-            self.after(0, self.progress_label.config, {"text": "已恢復真實定位"})
+            self.after(0, self._set_progress_label, "已恢復真實定位")
 
     async def _walk_pin(self, sim):
         lat = float(self.pin_lat.get())
         lon = float(self.pin_lon.get())
         self.after(0, self._log, f"📌 固定位置：{lat:.6f}, {lon:.6f}")
         await sim.set(lat, lon)
-        self.after(0, self.progress_var.set, 100)
-        self.after(0, self.progress_label.config,
-                   {"text": f"📌 固定中  {lat:.6f}, {lon:.6f}"})
+        self.after(0, self.progress_var.set, 1.0)
+        self.after(0, self._set_progress_label, f"📌 固定中  {lat:.6f}, {lon:.6f}")
         self.after(0, self._log, "✅ 定位已固定！按「停止」可保持在目前座標")
         self.pending_action = "pause"
 
@@ -1236,10 +1461,11 @@ class GPSApp(tk.Tk):
                 await sim.set(lat, lon)
                 idx = i
                 self.point_idx = i
-                progress = (i + 1) / total * 100 if direction == 1 else i / total * 100
-                self.after(0, self.progress_var.set, progress)
-                self.after(0, self.progress_label.config,
-                           {"text": f"{progress:.1f}%  📍 {lat:.6f}, {lon:.6f}{suffix}"})
+                # CTkProgressBar 的值域是 0~1，文字標籤仍顯示百分比。
+                frac = (i + 1) / total if direction == 1 else i / total
+                self.after(0, self.progress_var.set, frac)
+                self.after(0, self._set_progress_label,
+                           f"{frac*100:.1f}%  📍 {lat:.6f}, {lon:.6f}{suffix}")
                 await asyncio.sleep(1.0)
 
             if interrupted:
@@ -1259,7 +1485,7 @@ class GPSApp(tk.Tk):
                 self.after(0, self._log, "✅ 完成！保持於目前座標")
             else:
                 self.after(0, self._log, "✅ 已返回起點，保持於目前座標")
-            self.after(0, self.progress_label.config, {"text": "已完成"})
+            self.after(0, self._set_progress_label, "已完成")
             self.pending_action = "pause"
             return
 
