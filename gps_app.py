@@ -331,7 +331,7 @@ ROUTE_COL_INDEX_W = 34
 ROUTE_COL_COORD_W = 96
 ROUTE_COL_DEL_W = 44
 
-# 最愛列表的欄寬（像素）與列高。名稱欄會吃掉剩餘寬度，其餘欄位一律固定，
+# 我的最愛列表的欄寬（像素）與列高。名稱欄會吃掉剩餘寬度，其餘欄位一律固定，
 # 這樣名稱再長也不會把「載入」「✕」擠變形。
 FAV_ROW_H = 28
 FAV_COL_ICON_W = 26
@@ -695,13 +695,13 @@ class GPSApp(ctk.CTk):
         self.log.pack(fill="x", pady=(0, 20))
         self._update_log_height()
 
-        # ── 最愛地點面板（左欄）──
+        # ── 我的最愛面板（左欄）──
         fav_card, self.fav_frame = make_card(self.left_col, padx=20, pady=14)
         fav_card.pack(fill="x", pady=(0, 8))
 
         fav_title_row = ctk.CTkFrame(self.fav_frame, fg_color="transparent")
         fav_title_row.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(fav_title_row, text="⭐ 最愛地點",
+        ctk.CTkLabel(fav_title_row, text="⭐ 我的最愛",
                      font=(FONT, FS_LG, "bold"), text_color=TEXT,
                      fg_color="transparent").pack(side="left")
 
@@ -900,6 +900,7 @@ class GPSApp(ctk.CTk):
             self.pin_frame.pack(fill="x", pady=(0, 8))
             self.start_btn.configure(text="📌  固定定位")
         self._update_return_btn_state()
+        self._refresh_fav_list()
 
     def _set_btn_enabled(self, btn, enabled):
         """切換控制按鈕的可用狀態（含背景色）。
@@ -958,13 +959,17 @@ class GPSApp(ctk.CTk):
     def _refresh_fav_list(self):
         for w in self.fav_list_frame.winfo_children():
             w.destroy()
-        if not self.favorites:
-            ctk.CTkLabel(self.fav_list_frame, text="尚無儲存的最愛地點",
+        current_type = "pin" if self.mode.get() == "pin" else "route"
+        filtered = [(i, fav) for i, fav in enumerate(self.favorites)
+                    if fav["type"] == current_type]
+        if not filtered:
+            empty_text = "尚無儲存的最愛地點" if current_type == "pin" else "尚無儲存的最愛路線"
+            ctk.CTkLabel(self.fav_list_frame, text=empty_text,
                          font=(FONT, FS_SM), text_color=TEXT2,
                          fg_color="transparent", height=24).pack(anchor="w")
             return
-        for i, fav in enumerate(self.favorites):
-            row_color = BG3 if i % 2 == 0 else BG2
+        for row_i, (i, fav) in enumerate(filtered):
+            row_color = BG3 if row_i % 2 == 0 else BG2
             row = ctk.CTkFrame(self.fav_list_frame, fg_color=row_color,
                                corner_radius=6, height=FAV_ROW_H)
             row.pack(fill="x", pady=1)
@@ -976,6 +981,11 @@ class GPSApp(ctk.CTk):
                           fg_color="transparent", text_color=DANGER, hover_color=HOVER,
                           corner_radius=6, width=FAV_COL_DEL_W, height=22,
                           command=lambda i=i: self._del_fav(i)).pack(side="right", padx=(2, 6))
+
+            ctk.CTkButton(row, text="編輯", font=(FONT, FS_XS),
+                          fg_color="transparent", text_color=TEXT2, hover_color=HOVER,
+                          corner_radius=6, width=1, height=22, border_spacing=6,
+                          command=lambda i=i: self._rename_fav(i)).pack(side="right", padx=(2, 2))
 
             ctk.CTkButton(row, text="載入", font=(FONT, FS_XS), **BTN_PRIMARY,
                           corner_radius=6, width=1, height=22, border_spacing=6,
@@ -1087,6 +1097,17 @@ class GPSApp(ctk.CTk):
             save_favorites(self.favorites)
             self._refresh_fav_list()
             self._log("🗑  已刪除：" + name)
+
+    def _rename_fav(self, i):
+        old_name = self.favorites[i]["name"]
+        name = simpledialog.askstring("重新命名", "請輸入新名稱：",
+                                       parent=self, initialvalue=old_name)
+        if not name or name == old_name:
+            return
+        self.favorites[i]["name"] = name
+        save_favorites(self.favorites)
+        self._refresh_fav_list()
+        self._log(f"✏  已重新命名：{old_name} → {name}")
 
     def _set_speed(self, val):
         self.speed_var.set(round(val, 2))
