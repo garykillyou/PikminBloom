@@ -352,6 +352,21 @@ DEFAULT_ROUTE = [
     (24.1590, 120.6430, "勤美誠品"),
 ]
 
+def load_saved_route(settings):
+    """讀取上次關閉程式前的路線座標點；沒有存檔或格式不對就回傳 None，讓呼叫端 fallback 回預設路線。"""
+    raw = settings.get("last_route")
+    if not isinstance(raw, list) or len(raw) < 2:
+        return None
+    route = []
+    for item in raw:
+        if not isinstance(item, (list, tuple)) or len(item) != 3:
+            return None
+        lat, lon, name = item
+        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+            return None
+        route.append([lat, lon, str(name)])
+    return route
+
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371000
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -401,7 +416,7 @@ class GPSApp(ctk.CTk):
         self.session_active = False
         self.pending_action = "pause"  # "forward" | "reverse" | "pause" | "disconnect"
         self.point_idx = 0
-        self.route = [list(r) for r in DEFAULT_ROUTE]
+        self.route = load_saved_route(settings) or [list(r) for r in DEFAULT_ROUTE]
         self.mode = tk.StringVar(value="route")
         self.favorites = load_favorites()
         self._layout_wide = None
@@ -488,9 +503,17 @@ class GPSApp(ctk.CTk):
         self.settings["window"] = win
         save_settings(self.settings)
 
+    def _save_route_state(self):
+        self.settings["last_route"] = [[r[0], r[1], r[2]] for r in self.route]
+        save_settings(self.settings)
+
     def _on_close(self):
         try:
             self._save_window_geometry()
+        except Exception:
+            pass
+        try:
+            self._save_route_state()
         except Exception:
             pass
         self.destroy()

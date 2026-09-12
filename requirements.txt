@@ -1,2 +1,5 @@
 pymobiledevice3>=11.2.2
 customtkinter>=6.0.0
+PySide6>=6.7
+qasync>=0.27
+qt-material>=2.14
