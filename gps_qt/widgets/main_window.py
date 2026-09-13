@@ -15,7 +15,7 @@ from .. import persistence, theme, window_geometry
 from ..session import GPSSession
 from .favorites_panel import FavoritesPanel
 from .pin_panel import PinPanel
-from .route_panel import RoutePanel
+from .route_panel import DEFAULT_SPEED_KMH, RoutePanel
 
 DEFAULT_ROUTE = [
     [24.1368, 120.6862, "台中火車站"],
@@ -159,7 +159,8 @@ class MainWindow(QMainWindow):
 
         self.pin_panel = PinPanel()
         right_layout.addWidget(self.pin_panel)
-        self.route_panel = RoutePanel(route)
+        speed_kmh = self.settings.get("speed_kmh", DEFAULT_SPEED_KMH)
+        self.route_panel = RoutePanel(route, initial_speed=speed_kmh)
         right_layout.addWidget(self.route_panel)
 
         self.splitter.addWidget(right_col)
@@ -311,5 +312,6 @@ class MainWindow(QMainWindow):
         win["maximized"] = self.isMaximized()
         self.settings["window"] = win
         self.settings["last_route"] = [[r[0], r[1], r[2]] for r in self.route_panel.route]
+        self.settings["speed_kmh"] = self.route_panel.speed_spin.value()
         persistence.save_settings(self.settings)
         super().closeEvent(event)

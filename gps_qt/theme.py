@@ -22,6 +22,7 @@ FS_SECTION_TITLE = 18  # 區塊標題（「移動速度」「我的最愛」這�
 EXTRA_QSS_TEMPLATE = """
 .app-title {{ font-size: {app_title}pt; font-weight: bold; }}
 .section-title {{ font-size: {section_title}pt; font-weight: bold; }}
+.no-uppercase {{ text-transform: none; }}
 """
 
 

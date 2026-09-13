@@ -16,8 +16,11 @@ from ..models import COL_DELETE, COL_INDEX, COL_LAT, COL_LON, COL_NOTE, DeleteBu
 SPEED_PRESETS = [("步行 5 km/h", 5), ("慢跑 10 km/h", 10), ("騎車 20 km/h", 20), ("開車 40 km/h", 40)]
 
 
+DEFAULT_SPEED_KMH = 20.0
+
+
 class RoutePanel(QFrame):
-    def __init__(self, route, parent=None):
+    def __init__(self, route, parent=None, initial_speed=DEFAULT_SPEED_KMH):
         super().__init__(parent)
         layout = QVBoxLayout(self)
 
@@ -31,6 +34,7 @@ class RoutePanel(QFrame):
         presets_row = QHBoxLayout()
         for label, kmh in SPEED_PRESETS:
             btn = QPushButton(label)
+            theme.mark_class(btn, "no-uppercase")
             btn.clicked.connect(lambda checked=False, v=kmh: self.speed_spin.setValue(v))
             presets_row.addWidget(btn)
         presets_row.addStretch(1)
@@ -40,7 +44,7 @@ class RoutePanel(QFrame):
         custom_row.addWidget(QLabel("自訂 km/h："))
         self.speed_spin = QDoubleSpinBox()
         self.speed_spin.setRange(0.1, 300.0)
-        self.speed_spin.setValue(20.0)
+        self.speed_spin.setValue(initial_speed)
         custom_row.addWidget(self.speed_spin)
         self.loop_check = QCheckBox("循環模式（來回）")
         custom_row.addWidget(self.loop_check)

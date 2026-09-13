@@ -12,6 +12,9 @@ from PySide6.QtWidgets import (
 
 from .. import persistence, theme
 
+RENAME_DIALOG_MIN_WIDTH = 400
+RENAME_DIALOG_PADDING = 120  # 容納對話框邊距與輸入框內距，避免文字貼齊邊緣
+
 
 def _fix_to_hint(widget, extra=0):
     """把 widget 固定在它自己 sizeHint() 所需的寬度（可另外加一點邊界）。
@@ -62,18 +65,18 @@ class FavoritesPanel(QFrame):
         title_row = QHBoxLayout()
         title_row.addWidget(theme.style_section_title(QLabel("我的最愛")))
         title_row.addStretch(1)
-        save_pin_btn = QPushButton("儲存目前座標")
-        theme.mark_class(save_pin_btn, "success")
-        save_pin_btn.clicked.connect(self._save_pin)
-        title_row.addWidget(save_pin_btn)
-        save_route_btn = QPushButton("儲存目前路線")
-        theme.mark_class(save_route_btn, "success")
-        save_route_btn.clicked.connect(self._save_route)
-        title_row.addWidget(save_route_btn)
-        import_btn = QPushButton("匯入 KML 路線")
-        theme.mark_class(import_btn, "success")
-        import_btn.clicked.connect(self._import_kml)
-        title_row.addWidget(import_btn)
+        self._save_pin_btn = QPushButton("儲存目前座標")
+        theme.mark_class(self._save_pin_btn, "success")
+        self._save_pin_btn.clicked.connect(self._save_pin)
+        title_row.addWidget(self._save_pin_btn)
+        self._save_route_btn = QPushButton("儲存目前路線")
+        theme.mark_class(self._save_route_btn, "success")
+        self._save_route_btn.clicked.connect(self._save_route)
+        title_row.addWidget(self._save_route_btn)
+        self._import_btn = QPushButton("匯入 KML 路線")
+        theme.mark_class(self._import_btn, "success")
+        self._import_btn.clicked.connect(self._import_kml)
+        title_row.addWidget(self._import_btn)
         layout.addLayout(title_row)
 
         self.list_widget = QListWidget()
@@ -84,6 +87,9 @@ class FavoritesPanel(QFrame):
     def refresh(self):
         self.list_widget.clear()
         current_type = "pin" if self._mode_provider() == "pin" else "route"
+        self._save_pin_btn.setVisible(current_type == "pin")
+        self._save_route_btn.setVisible(current_type == "route")
+        self._import_btn.setVisible(current_type == "route")
         filtered = [(i, fav) for i, fav in enumerate(self.favorites) if fav["type"] == current_type]
         if not filtered:
             empty_text = "尚無儲存的最愛地點" if current_type == "pin" else "尚無儲存的最愛路線"
@@ -165,7 +171,15 @@ class FavoritesPanel(QFrame):
 
     def _rename(self, i):
         fav = self.favorites[i]
-        name, ok = QInputDialog.getText(self, "重新命名", "請輸入新名稱：", text=fav["name"])
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("重新命名")
+        dialog.setLabelText("請輸入新名稱：")
+        dialog.setTextValue(fav["name"])
+        text_width = dialog.fontMetrics().horizontalAdvance(fav["name"])
+        width = max(RENAME_DIALOG_MIN_WIDTH, text_width + RENAME_DIALOG_PADDING)
+        dialog.resize(width, dialog.sizeHint().height())
+        ok = dialog.exec()
+        name = dialog.textValue()
         if not ok or not name:
             return
         fav["name"] = name
