@@ -1,7 +1,9 @@
 """固定定位模式面板：對應原本 gps_app.py 的 pin_frame。"""
 
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
-    QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+    QApplication, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QVBoxLayout,
 )
 
 from .. import theme
@@ -12,6 +14,40 @@ PIN_PRESETS = [
     ("高雄85大樓", 22.6155, 120.3025),
     ("台南孔廟", 22.9969, 120.2008),
 ]
+
+
+class _CoordinatePasteLineEdit(QLineEdit):
+    """貼上「緯度, 經度」格式的文字時（快速鍵或右鍵選單皆適用），改為分別帶入兩個欄位而非插入文字本身。
+
+    QLineEdit 沒有像 QTextEdit 那樣的 insertFromMimeData() 掛勾可覆寫，且右鍵選單的
+    「Paste」動作是接到 C++ 端非 virtual 的 paste() slot，Python 覆寫也攔不到；因此改為
+    分別攔截 Ctrl+V 快速鍵與右鍵選單的 Paste 動作這兩個實際入口。
+    """
+
+    def __init__(self, on_paste_coordinates, parent=None):
+        super().__init__(parent)
+        self._on_paste_coordinates = on_paste_coordinates
+
+    def _try_intercept_clipboard(self) -> bool:
+        text = QApplication.clipboard().text()
+        return bool(text) and self._on_paste_coordinates(text)
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Paste) and self._try_intercept_clipboard():
+            return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = self.createStandardContextMenu()
+        for action in menu.actions():
+            if "Paste" in action.text():
+                action.triggered.disconnect()
+                action.triggered.connect(self._on_paste_action)
+        menu.exec(event.globalPos())
+
+    def _on_paste_action(self, checked=False):
+        if not self._try_intercept_clipboard():
+            self.paste()
 
 
 class PinPanel(QFrame):
@@ -28,12 +64,14 @@ class PinPanel(QFrame):
         self.lat_spin.setDecimals(6)
         self.lat_spin.setRange(-90.0, 90.0)
         self.lat_spin.setValue(24.1368)
+        self.lat_spin.setLineEdit(_CoordinatePasteLineEdit(self._try_apply_pasted_coordinates))
         form.addRow("緯度：", self.lat_spin)
 
         self.lon_spin = QDoubleSpinBox()
         self.lon_spin.setDecimals(6)
         self.lon_spin.setRange(-180.0, 180.0)
         self.lon_spin.setValue(120.6862)
+        self.lon_spin.setLineEdit(_CoordinatePasteLineEdit(self._try_apply_pasted_coordinates))
         form.addRow("經度：", self.lon_spin)
         layout.addLayout(form)
 
@@ -55,6 +93,21 @@ class PinPanel(QFrame):
     def _apply_preset(self, lat, lon):
         self.lat_spin.setValue(lat)
         self.lon_spin.setValue(lon)
+
+    def _try_apply_pasted_coordinates(self, text: str) -> bool:
+        parts = text.split(",")
+        if len(parts) != 2:
+            return False
+        try:
+            lat = float(parts[0].strip())
+            lon = float(parts[1].strip())
+        except ValueError:
+            return False
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            return False
+        self.lat_spin.setValue(lat)
+        self.lon_spin.setValue(lon)
+        return True
 
     def coordinates(self):
         return self.lat_spin.value(), self.lon_spin.value()
