@@ -204,6 +204,8 @@ PinDrift/
 ├── tunneld_entry.py        # 打包用的 tunneld 進入點
 ├── pindrift_favorites.json # 最愛地點資料（自動產生）
 ├── pindrift_settings.json  # 主題、視窗位置、上次路線與速度、地圖設定（自動產生）
+├── .gitattributes          # vendored 的 Leaflet 檔案不做行尾轉換
+├── LICENSE                 # MIT 授權條款全文
 └── README.md
 ```
 
@@ -274,7 +276,7 @@ App 全程只建立一條長連線：開始、切換方向、停止都只是改�
 ## 🧪 測試
 
 只涵蓋不需要 Qt 事件迴圈的純邏輯（距離計算、內插、路徑簡化、polyline 解碼、
-地圖 payload 序列化、搜尋結果解析、設定正規化）：
+地圖 payload 序列化、搜尋結果解析、設定正規化、JSON 存檔失敗處理）：
 
 ```bash
 pip install -r requirements-dev.txt

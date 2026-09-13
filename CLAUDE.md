@@ -30,13 +30,13 @@ PinDrift 是一個 Python 桌面工具，透過 `pymobiledevice3` 模擬 iPhone�
 # 安裝相依套件
 pip install -r requirements.txt
 
-# 執行 App（tunneld 需已啟動）
+# 執行 App（tunneld 會自動偵測並提權啟動，見下方說明）
 python -m gps_qt.main
 
 # 手動啟動 tunneld（需「系統管理員」終端機，建立 iOS 26 的 RemoteXPC 加密通道）
 python -m pymobiledevice3 remote tunneld
 
-# 執行測試（只涵蓋純邏輯：geo、map_bridge payload、geocode 解析、routing polyline、設定正規化）
+# 執行測試（只涵蓋純邏輯：geo、map_bridge payload、geocode 解析、routing polyline、設定正規化、存檔失敗處理）
 pip install -r requirements-dev.txt
 python -m pytest
 
@@ -48,6 +48,10 @@ python -m PyInstaller --noconfirm --clean PinDrift.spec
 一般情況下不需要手動跑 tunneld：App 啟動後 [MainWindow._ensure_tunneld()](gps_qt/widgets/main_window.py)
 會呼叫 [tunneld.py](gps_qt/tunneld.py) 偵測 `127.0.0.1:49151` 是否已經有人在聽，沒有的話用
 `ShellExecuteW` 的 `runas` 動詞以系統管理員身分啟動（會跳 UAC），結果寫進執行日誌。
+提權的對象由 `_elevated_command()` 依「是否已凍結」分成兩條路：未凍結時跑
+`python.exe -m gps_qt.tunneld`（**刻意把 `pythonw.exe` 換回 `python.exe`**，開發時才看得到
+tunneld 的主控台輸出），已凍結時跑同一個資料夾裡的 `PinDrift-tunneld.exe`——打包後使用者的
+機器上沒有 Python，`python -m pymobiledevice3 ...` 那條路整條斷掉。
 [run.bat](run.bat) 因此只剩「用 `pythonw` 開 App」一件事。
 
 測試只涵蓋不需要 Qt 事件迴圈的純函式（[tests/](tests)），Widget 與地圖頁面沒有自動化測試；
@@ -67,6 +71,7 @@ PinDrift/
 ├── requirements-dev.txt   # 測試相依（pytest）
 ├── requirements-build.txt # 打包相依（pyinstaller）
 ├── .gitattributes         # vendored 的 Leaflet 檔案排除行尾轉換（見下方地圖面板）
+├── LICENSE                # MIT 授權條款全文
 ├── conftest.py            # 讓 pytest 把根目錄加進 sys.path
 ├── tests/                 # 純函式測試（不需要 Qt 事件迴圈）
 └── gps_qt/
@@ -230,7 +235,9 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
   `setFont()`，要用 `mark_class(widget, "app-title"/"section-title")` 設定 Qt 動態屬性 `class`，並在
   `EXTRA_QSS_TEMPLATE` 補一段對應的 `.app-title`/`.section-title` 選擇器（`apply()` 產生完 qt-material
   的樣式表後會再 append 這段），才蓋得過去。新增任何「這個 widget 字級要特別大/特別色」的需求都要走
-  這個模式，不要直接 `setFont()`。
+  這個模式，不要直接 `setFont()`。區塊標題另有包好的 `theme.style_section_title(label)`（內部就是
+  `mark_class(label, "section-title")` 再回傳同一個 label），各面板一律呼叫它，不要自己再寫一次
+  `mark_class()`，字串打錯不會報錯、只會靜靜地不套用。
 - 按鈕的語意色（危險/成功動作）也是同一套機制：`mark_class(btn, "danger")`／`mark_class(btn, "success")`
   對應 qt-material 內建的 `QPushButton.danger`／`.success` 規則（靠 Qt 動態屬性 `class` 選取，這點已用
   offscreen 平台實際渲染截圖驗證過，不是靠猜的）。`mark_class()` 呼叫完一定要 `unpolish()`/`polish()`
@@ -381,7 +388,7 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
 - **三個實測踩到的坑**（改 `EXCLUDED_MODULES` 前務必先讀）：
   1. `PySide6.QtUiTools` **不能排除**——`qt_material/__init__.py` 直接 import 它，排掉會在
      `import qt_material` 當場 `ModuleNotFoundError`。同理 `QtQml`／`QtQuick`／`QtPositioning`／
-     `QtOpenGL` 是 QtWebEngine 的相依，排掉地圖會壞。
+     `QtWebChannel`／`QtNetwork`／`QtOpenGL` 是 QtWebEngine 的相依，排掉地圖會壞。
   2. `prompt_toolkit` **不能排除**——`pymobiledevice3/cli/cli_common.py` 匯入的 `questionary`
      依賴它，排掉 tunneld 一啟動就 `ModuleNotFoundError`。`pygments` 同理（`remotexpc.py` 與
      `service_connection.py` 會用到）。可以排的是螢幕錄影／截圖／互動式 shell 那條路上的
@@ -390,6 +397,14 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
   3. `wintun.dll` 在 **另一個發行套件** `pytun_pmd3` 裡，`collect_all("pymobiledevice3")` 不會
      一起帶走，少了它 tunneld 一啟動就 `FileNotFoundError`。所以 spec 裡另外
      `collect_all("pytun_pmd3")`。
+- **`qt_material` 也要 `collect_all()`**：主題色票是套件目錄裡的 `.xml` 與 `.css.template`，
+  是資料檔而不是 `.py`，靜態分析不會帶走，少了它 `theme.apply()` 會找不到 `dark_red.xml`。
+  凡是「相依套件把資源放在自己的套件目錄裡」都是同一類問題，新增相依時要先想一下這件事。
+- **`upx=False` 不要打開**：UPX 壓縮過的 Qt DLL 常常載入失敗，省下的體積換來隨機的啟動錯誤，
+  不划算。`EXE()` 與 `COLLECT()` 兩處都要維持關閉。
+- **`multiprocessing.freeze_support()` 必須是進入點的第一件事**（[app_entry.py](app_entry.py) 與
+  `tunneld.run_cli()` 都有）：凍結後的程式若有子行程以 spawn 方式啟動，會重新執行整個進入點腳本，
+  沒先呼叫就會無限遞迴開新視窗。新增任何進入點腳本都要照抄這個開頭。
 - **視窗模式的 exe 當掉時看不到 traceback**，只會跳一個 PyInstaller 的錯誤對話框，而且那個
   對話框會讓行程一直活著——用「行程還在」判斷啟動成功會得到假的綠燈。驗證時要改用
   `subprocess.PIPE` 收 stdout，並確認 `QtWebEngineProcess.exe` 這個子行程真的起來了
