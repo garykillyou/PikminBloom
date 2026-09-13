@@ -18,7 +18,7 @@ from PySide6.QtCore import QDateTime, QObject, QUrl, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 
 VALHALLA_URL = "https://valhalla1.openstreetmap.de/route"
-USER_AGENT = "PikminBloom-GPS-Simulator/1.0 (https://github.com/telexper/PikminBloom)"
+USER_AGENT = "PinDrift-GPS-Simulator/1.0 (https://github.com/garykillyou/PinDrift)"
 MIN_REQUEST_INTERVAL_MS = 1000
 
 COSTING_PEDESTRIAN = "pedestrian"

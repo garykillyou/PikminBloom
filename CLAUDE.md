@@ -48,7 +48,7 @@ python -m pytest
 
 ### 檔案地圖
 ```
-PikminBloom/
+PinDrift/
 ├── run.bat              # 啟動捷徑：先確保 tunneld 在跑，再用 pythonw 開 App
 ├── start_tunneld.ps1    # 偵測 49151 埠，必要時以系統管理員啟動 tunneld
 ├── conftest.py          # 讓 pytest 把根目錄加進 sys.path

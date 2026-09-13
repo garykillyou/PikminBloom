@@ -1,4 +1,4 @@
-# 📍 iPhone GPS 路線模擬器
+# 📍 PinDrift — iPhone GPS 路線模擬器
 
 > 免費、免越獄、免 iTunes，在 Windows 上模擬 iPhone GPS 定位的桌面工具。支援 iOS 26。
 
@@ -52,8 +52,8 @@
 **2. 下載本專案**
 
 ```bash
-git clone https://github.com/garykillyou/PikminBloom.git
-cd PikminBloom
+git clone https://github.com/garykillyou/PinDrift.git
+cd PinDrift
 ```
 
 **3. 安裝相依套件**
@@ -172,7 +172,7 @@ python -m gps_qt.main
 ## 📁 檔案結構
 
 ```
-PikminBloom/
+PinDrift/
 ├── gps_qt/                 # 主程式（GUI App，PySide6 + qasync + qt-material）
 │   └── web/                # 內嵌地圖頁面（Leaflet，含本地副本，不依賴 CDN）
 ├── tests/                  # 純函式測試（pytest）

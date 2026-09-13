@@ -15,7 +15,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 # Nominatim 政策要求能識別發出請求的應用程式；換成自己的專案位址也可以。
-USER_AGENT = "PikminBloom-GPS-Simulator/1.0 (https://github.com/telexper/PikminBloom)"
+USER_AGENT = "PinDrift-GPS-Simulator/1.0 (https://github.com/garykillyou/PinDrift)"
 MIN_REQUEST_INTERVAL_MS = 1000  # 政策上限：每秒最多 1 次
 RESULT_LIMIT = 8
 
