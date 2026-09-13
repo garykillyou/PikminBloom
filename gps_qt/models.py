@@ -1,7 +1,7 @@
-"""路線表格的 Qt model/delegate：取代原本 gps_app.py 手刻的虛擬化清單。
+"""路線表格的 Qt model/delegate：用 QTableView 取代手刻的虛擬化清單。
 
 QTableView + QAbstractTableModel 原生只 render 可見列，不論路線有幾個點
-都不需要像原本的 ROUTE_ROW_POOL 那樣自己管理列 widget 的重複利用。
+都不需要自己管理列 widget 的重複利用。
 """
 
 from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, Qt, Signal

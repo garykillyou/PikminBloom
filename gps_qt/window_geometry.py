@@ -1,9 +1,9 @@
 """視窗位置記憶：大小/座標/是否最大化存在 settings 的 "window" 欄位。
 
-改用 Qt 的 QScreen API 判斷座標是否落在任何一台螢幕內，取代原本
-gps_app.py 用 ctypes 呼叫 Win32 MonitorFromPoint 的做法；Qt6 的
-QWidget.geometry()/QScreen.availableGeometry() 都是邏輯像素，
-不需要再手動做實體/邏輯像素換算。
+用 Qt 的 QScreen API 判斷座標是否落在任何一台螢幕內，不需要 ctypes
+呼叫 Win32 MonitorFromPoint；Qt6 的 QWidget.geometry() 與
+QScreen.availableGeometry() 都是邏輯像素，也不需要手動做實體/邏輯
+像素換算。
 """
 
 from PySide6.QtCore import QPoint

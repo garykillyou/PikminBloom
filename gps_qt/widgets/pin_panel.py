@@ -1,4 +1,4 @@
-"""固定定位模式面板：對應原本 gps_app.py 的 pin_frame。"""
+"""固定定位模式面板：緯度／經度輸入、快速選擇與座標貼上攔截。"""
 
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (

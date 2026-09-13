@@ -1,9 +1,9 @@
-"""定位模擬的連線狀態機：與原本 gps_app.py 的 pending_action 設計相同。
+"""定位模擬的連線狀態機：動作切換全部透過 pending_action 這個共享狀態。
 
-差異在於用 qasync 讓 asyncio 事件迴圈直接跑在 Qt 事件迴圈的同一條 thread
-上，不再需要背景 thread + self.after(0, ...) 這層 marshalling；協程直接
-用 Qt signal 把狀態送出，UI 層 connect 對應的 slot 即可，不需要自己判斷
-「目前是不是在背景執行緒」。
+用 qasync 讓 asyncio 事件迴圈直接跑在 Qt 事件迴圈的同一條 thread 上，
+不需要背景 thread，也不需要跨執行緒 marshalling；協程直接用 Qt signal
+把狀態送出，UI 層 connect 對應的 slot 即可，不需要自己判斷「目前是不是
+在背景執行緒」。
 
 維持一條長連線：開始/返回/停止都只是換動作，不會中斷連線；只有拿到
 "disconnect" 動作（按下「恢復真實定位」）才會真正斷線，斷線當下裝置會

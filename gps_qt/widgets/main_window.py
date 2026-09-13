@@ -1,7 +1,6 @@
 """主視窗：整體版面、按鈕狀態機、視窗幾何/主題存讀。
 
-對應原本 gps_app.py 的 GPSApp 類別裡屬於「UI 骨架」的部分；連線狀態機
-搬到 gps_qt/session.py 的 GPSSession。
+這裡只放 UI 骨架，連線狀態機在 gps_qt/session.py 的 GPSSession。
 """
 
 from PySide6.QtCore import Qt
@@ -49,7 +48,7 @@ class MainWindow(QMainWindow):
         self.map_settings = persistence.load_map_settings(self.settings)
         self._coords_collapsed = False
 
-        self.setWindowTitle("iPhone GPS 路線模擬器")
+        self.setWindowTitle("PinDrift — iPhone GPS 路線模擬器")
         self.setMinimumSize(window_geometry.MIN_WINDOW_W, window_geometry.MIN_WINDOW_H)
         maximize = window_geometry.restore_geometry(self, self.settings)
         self._normal_geometry = window_geometry.capture_geometry(self)
@@ -90,7 +89,7 @@ class MainWindow(QMainWindow):
         outer_layout = QVBoxLayout(central)
 
         title_row = QHBoxLayout()
-        title_label = theme.mark_class(QLabel("GPS 路線模擬器"), "app-title")
+        title_label = theme.mark_class(QLabel("PinDrift"), "app-title")
         title_row.addWidget(title_label)
         subtitle = QLabel("iPhone iOS 26  ·  需先執行 tunneld")
         title_row.addWidget(subtitle)

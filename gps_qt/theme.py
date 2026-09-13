@@ -2,7 +2,7 @@
 
 qt-material 最新版本身沒有版本限制問題（純 Python，任何 Qt binding 皆可）。
 色票（含 danger/success 等語意色）全部使用 qt-material 內建主題的預設值，
-不覆寫成原本 gps_app.py 的品牌色。
+不覆寫成自訂品牌色。
 """
 
 import qt_material

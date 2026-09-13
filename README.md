@@ -236,4 +236,12 @@ python -m pytest
 
 ## 📄 License
 
-MIT License
+MIT License — 條款全文見 [LICENSE](LICENSE)。
+
+---
+
+## 🙏 致謝
+
+本專案最初 fork 自 [JRTTF/PikminBloom](https://github.com/JRTTF/PikminBloom)，該專案在其 README 中
+聲明採用 MIT License。原始的 CustomTkinter 版本（`gps_app.py`）已完全移除，目前的 `gps_qt/` 是
+以 PySide6 從頭重寫的版本。

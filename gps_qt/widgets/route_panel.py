@@ -1,7 +1,6 @@
 """路線模式面板：速度設定 + 路線座標點表格（QTableView 虛擬化）。
 
-對應原本 gps_app.py 的 speed_frame_ref + route_section，取代手刻的
-ROUTE_ROW_POOL 虛擬化清單（見 gps_qt/models.py 的說明）。
+表格為什麼用 QTableView 取代手刻的虛擬化清單，見 gps_qt/models.py 的說明。
 """
 
 from PySide6.QtWidgets import (

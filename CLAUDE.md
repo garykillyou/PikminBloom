@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-Python 桌面工具，透過 `pymobiledevice3` 模擬 iPhone（iOS 26）的 GPS 定位，免越獄、免 iTunes，
-僅需 USB 連線。GUI 用 **PySide6 + qasync + qt-material**（[gps_qt/](gps_qt) 套件），進入點為
-`gps_qt/main.py`。
+PinDrift 是一個 Python 桌面工具，透過 `pymobiledevice3` 模擬 iPhone（iOS 26）的 GPS 定位，
+免越獄、免 iTunes，僅需 USB 連線。GUI 用 **PySide6 + qasync + qt-material**
+（[gps_qt/](gps_qt) 套件，套件名沿用舊名未改），進入點為 `gps_qt/main.py`。
 
 座標可以直接在內嵌的 Leaflet 地圖上點選、拖曳、刪除（[gps_qt/web/](gps_qt/web)），
 移動中還會即時畫出目前位置與已走軌跡。
@@ -30,7 +30,7 @@ python -m gps_qt.main
 # 手動啟動 tunneld（需「系統管理員」終端機，建立 iOS 26 的 RemoteXPC 加密通道）
 python -m pymobiledevice3 remote tunneld
 
-# 執行測試（只涵蓋純邏輯：geo、map_bridge payload、geocode 解析、設定正規化）
+# 執行測試（只涵蓋純邏輯：geo、map_bridge payload、geocode 解析、routing polyline、設定正規化）
 pip install -r requirements-dev.txt
 python -m pytest
 ```
@@ -51,6 +51,9 @@ python -m pytest
 PinDrift/
 ├── run.bat              # 啟動捷徑：先確保 tunneld 在跑，再用 pythonw 開 App
 ├── start_tunneld.ps1    # 偵測 49151 埠，必要時以系統管理員啟動 tunneld
+├── requirements.txt     # 執行 App 需要的相依套件
+├── requirements-dev.txt # 測試相依（pytest）
+├── .gitattributes       # vendored 的 Leaflet 檔案排除行尾轉換（見下方地圖面板）
 ├── conftest.py          # 讓 pytest 把根目錄加進 sys.path
 ├── tests/               # 純函式測試（不需要 Qt 事件迴圈）
 └── gps_qt/
@@ -147,6 +150,10 @@ payload 一律由模組層級的純函式序列化（`route_payload()`／`bounds
   請求，`_abort_pending()` 讓同時間只保留最後一次查詢，避免舊結果比新結果晚到而覆蓋掉畫面。
 - **Leaflet 本地化**在 `web/vendor/`：純靠 CDN 時斷網會整頁白，本地化後控制項仍在，
   只有圖磚空白並由 `tileerror` 顯示提示橫幅。
+  `.gitattributes` 把 `gps_qt/web/vendor/**` 標為 `-text`，**vendored 檔案一律不做行尾轉換**：
+  上游發布的 `leaflet.css` 本身就是 CRLF，被 `core.autocrlf` 正規化成 LF 後版控內容會與上游
+  差 661 bytes，日後升級版本時整個檔案都會是差異，也無法用 checksum 驗證抓下來的檔案有沒有
+  被動過。之後再 vendor 任何第三方檔案都要記得加進這條規則。
 
 ### 路徑規劃：Valhalla + Douglas-Peucker
 `interpolate_points()` 在兩點之間走的是**直線**；要沿實際道路走就必須有路網資料，

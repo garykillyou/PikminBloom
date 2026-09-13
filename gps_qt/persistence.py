@@ -1,4 +1,4 @@
-"""JSON 存讀與 KML 解析：與原 gps_app.py 完全相同的檔案格式與欄位。"""
+"""JSON 存讀與 KML 解析：最愛地點／路線與本機設定的檔案格式。"""
 
 import json
 import os
