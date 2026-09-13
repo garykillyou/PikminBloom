@@ -12,8 +12,8 @@ Python 桌面工具，透過 `pymobiledevice3` 模擬 iPhone（iOS 26）的 GPS 
 移動中還會即時畫出目前位置與已走軌跡。
 
 狀態存在專案根目錄下的兩個 JSON 檔（皆已列入 `.gitignore`）：
-- `gps_favorites.json`：最愛地點／路線（`{"type": "pin"|"route", "name", ...}` 陣列）。
-- `gps_settings.json`：`theme`（主題偏好）、`window`（視窗幾何 + `maximized`）、
+- `pindrift_favorites.json`：最愛地點／路線（`{"type": "pin"|"route", "name", ...}` 陣列）。
+- `pindrift_settings.json`：`theme`（主題偏好）、`window`（視窗幾何 + `maximized`）、
   `last_route`（上次的路線座標點）、`speed_kmh`（上次的移動速度）、
   `map`（地圖的 `tile_source`／`custom_tile_url`／`custom_attribution`／`center`／`zoom`／`follow`／
   `routing_costing`／`simplify_m`，由 `persistence.load_map_settings()` 補齊預設值）。
@@ -262,7 +262,7 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
 內，回傳 `None` 就代表無效、位置交給 Windows 決定。Qt6 預設開啟 High-DPI scaling，`QWidget.geometry()`
 拿到的座標本身就是邏輯像素，不需要手動做實體/邏輯像素換算。`MainWindow` 只在 `not self.isMaximized()`
 時才更新 `_normal_geometry`（`resizeEvent`/`moveEvent` 都會呼叫），因為最大化時的幾何不能當還原基準；
-`closeEvent()` 用這份記錄的座標存檔，同時把 `last_route` 與 `speed_kmh` 一起寫回 `gps_settings.json`。
+`closeEvent()` 用這份記錄的座標存檔，同時把 `last_route` 與 `speed_kmh` 一起寫回 `pindrift_settings.json`。
 
 ### 路線表格：QTableView 虛擬化
 [models.py](gps_qt/models.py) 的 `RouteTableModel(QAbstractTableModel)` + `RoutePanel`（[route_panel.py](gps_qt/widgets/route_panel.py)）

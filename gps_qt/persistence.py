@@ -4,8 +4,8 @@ import json
 import os
 import xml.etree.ElementTree as ET
 
-FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gps_favorites.json")
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gps_settings.json")
+FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pindrift_favorites.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pindrift_settings.json")
 FAVORITES_FILE = os.path.normpath(FAVORITES_FILE)
 SETTINGS_FILE = os.path.normpath(SETTINGS_FILE)
 
