@@ -8,10 +8,15 @@ Python 桌面工具，透過 `pymobiledevice3` 模擬 iPhone（iOS 26）的 GPS 
 僅需 USB 連線。GUI 用 **PySide6 + qasync + qt-material**（[gps_qt/](gps_qt) 套件），進入點為
 `gps_qt/main.py`。
 
+座標可以直接在內嵌的 Leaflet 地圖上點選、拖曳、刪除（[gps_qt/web/](gps_qt/web)），
+移動中還會即時畫出目前位置與已走軌跡。
+
 狀態存在專案根目錄下的兩個 JSON 檔（皆已列入 `.gitignore`）：
 - `gps_favorites.json`：最愛地點／路線（`{"type": "pin"|"route", "name", ...}` 陣列）。
 - `gps_settings.json`：`theme`（主題偏好）、`window`（視窗幾何 + `maximized`）、
-  `last_route`（上次的路線座標點）、`speed_kmh`（上次的移動速度）。
+  `last_route`（上次的路線座標點）、`speed_kmh`（上次的移動速度）、
+  `map`（地圖的 `tile_source`／`custom_tile_url`／`custom_attribution`／`center`／`zoom`／`follow`／
+  `routing_costing`／`simplify_m`，由 `persistence.load_map_settings()` 補齊預設值）。
 
 ## 常用指令
 
@@ -24,6 +29,10 @@ python -m gps_qt.main
 
 # 手動啟動 tunneld（需「系統管理員」終端機，建立 iOS 26 的 RemoteXPC 加密通道）
 python -m pymobiledevice3 remote tunneld
+
+# 執行測試（只涵蓋純邏輯：geo、map_bridge payload、geocode 解析、設定正規化）
+pip install -r requirements-dev.txt
+python -m pytest
 ```
 
 一般情況下不需要手動跑 tunneld：雙擊 [run.bat](run.bat) 會先呼叫
@@ -32,7 +41,8 @@ python -m pymobiledevice3 remote tunneld
 啟動 App（不顯示主控台視窗，cmd 視窗隨即關閉）。`start_tunneld.ps1` 用離開碼傳遞狀態：
 `0` = tunneld 已在執行、`1` = 剛啟動（run.bat 據此決定要不要等待）。
 
-目前專案沒有測試、lint 或 build 設定（無 test/CI/lint 相關檔案）。
+測試只涵蓋不需要 Qt 事件迴圈的純函式（[tests/](tests)），Widget 與地圖頁面沒有自動化測試；
+專案沒有 lint 或 build 設定，也沒有 CI。
 
 ## 架構重點
 
@@ -41,16 +51,26 @@ python -m pymobiledevice3 remote tunneld
 PikminBloom/
 ├── run.bat              # 啟動捷徑：先確保 tunneld 在跑，再用 pythonw 開 App
 ├── start_tunneld.ps1    # 偵測 49151 埠，必要時以系統管理員啟動 tunneld
+├── conftest.py          # 讓 pytest 把根目錄加進 sys.path
+├── tests/               # 純函式測試（不需要 Qt 事件迴圈）
 └── gps_qt/
     ├── main.py              # 進入點：QApplication + qasync 事件迴圈
     ├── theme.py             # qt-material 主題套用、字級覆寫、danger/success 語意色
-    ├── geo.py               # haversine()、interpolate_points()
-    ├── persistence.py       # JSON 存讀 + KML 解析
+    ├── geo.py               # haversine()、interpolate_points()、douglas_peucker()
+    ├── persistence.py       # JSON 存讀 + KML 解析 + 地圖設定正規化
     ├── window_geometry.py   # 視窗位置記憶（QScreen API）
     ├── session.py           # GPSSession：連線狀態機（pending_action 設計）
     ├── models.py            # RouteTableModel + DeleteButtonDelegate（路線表格虛擬化）
+    ├── map_bridge.py        # QWebChannel 契約（MapBridge）+ payload 序列化純函式
+    ├── geocode.py           # Nominatim 地名搜尋（Python 端發送，符合使用政策）
+    ├── routing.py           # Valhalla 路徑規劃 + polyline6 解碼
+    ├── web/                 # 地圖頁面（QWebEngineView 以 file:// 載入）
+    │   ├── map.html / map.css / map.js
+    │   └── vendor/          # Leaflet 1.9.4 本地副本（不依賴 CDN）
     └── widgets/
-        ├── main_window.py      # 整體版面、控制按鈕狀態機、模式切換
+        ├── main_window.py      # 整體版面、控制按鈕狀態機、模式切換、地圖連動
+        ├── map_panel.py        # QWebEngineView + Qt 原生工具列（搜尋/圖磚/跟隨/清軌跡）
+        ├── route_planner.py    # 路徑規劃工具列：點起訖點 → 算出沿道路的路線
         ├── pin_panel.py        # 固定定位模式面板（含座標貼上攔截）
         ├── route_panel.py      # 路線模式面板（速度設定 + 路線表格）
         └── favorites_panel.py  # 最愛清單
@@ -72,6 +92,69 @@ PikminBloom/
   因此使用者中途勾選／取消勾選會在下一次抵達端點時生效；折返時會一併更新 `direction`、`action_name`
   與 `pending_action`，並 emit `direction_changed`，讓按鈕文字跟著改成新的方向。
 - **固定定位模式（pin）**：`_walk_pin(sim)` 呼叫一次 `sim.set(lat, lon)` 後立刻把 `pending_action` 設回 `"pause"`，讓外層 while 迴圈進入 `await asyncio.sleep(0.2)` 的閒置分支，藉此在同一條長連線上「保持」定位，直到使用者按「停止」（其實已經是 pause 狀態，UI 只更新按鈕）或「恢復真實定位」。
+
+### 地圖面板：QWebEngineView + Leaflet + QWebChannel
+右欄以地圖為主體（[map_panel.py](gps_qt/widgets/map_panel.py)），座標面板在下方可整個收合。
+
+**溝通契約**全部走 [map_bridge.py](gps_qt/map_bridge.py) 的 `MapBridge`：signal 是 Python → JS
+（JS 端 `bridge.xxx.connect()`），slot 一律命名為 `on_*` 是 JS → Python（slot 收到後轉成去掉
+`on_` 前綴的同名 Qt signal，讓 `MapPanel` 用一般的 `.connect()` 接）。新增任何互動時兩邊都要成對加。
+
+- **回授迴圈防護（最容易踩的坑）**：模型變動會回推整條路線給地圖，而地圖拖曳又會回寫模型。
+  兩層擋住：(a) `MapPanel._schedule_route_push()` 用 `QTimer.singleShot(0)` 把同一輪事件迴圈的
+  多次推送合併成一次；(b) `map.js` 的 `renderRoute()` 比對「JSON 與上次收到的完全相同就跳過重繪」。
+  因此 **`route_payload()` 絕對不能加流水號、時間戳這類每次都會變的欄位**，加了 (b) 就失效。
+  另外節點拖曳只在 `dragend` 通知 Python（`drag` 過程僅在本地更新折線），確保回推一定發生在
+  拖曳結束後，不會把正在拖的 marker 重建掉。
+- **頁面是非同步載入的**：`MapPanel` 的每一項狀態都先存成成員變數，等頁面回報 `map_ready`
+  才在 `_on_map_ready()` 一次推過去（順序有意義：先視野與圖磚，再畫內容，最後才套鎖定狀態——
+  鎖定會重畫所有節點圖示，必須在節點已存在之後）。之後的變動才即時送出。
+- **三個查證過的載入陷阱**：
+  1. `main.py` 必須在建立 `QApplication` **之前** `import PySide6.QtWebEngineWidgets`，Qt 6 要在
+     那時候設好 `AA_ShareOpenGLContexts`，順序反了會直接中止。那行 import 看起來沒用到但不能刪。
+  2. `qwebchannel.js` 不從 CDN 抓，也不能用 `qrc:///qtwebchannel/qwebchannel.js`（`file://` 頁面
+     讀不到 qrc）；改成 `QFile(":/qtwebchannel/qwebchannel.js")` 讀出原始碼，用 `QWebEngineScript`
+     在 `DocumentCreation` 時機注入，`map.js` 執行時 `QWebChannel` 才一定已存在。
+  3. `map.html` 是 `file://` 頁面而圖磚來自 https，必須打開
+     `QWebEngineSettings.LocalContentCanAccessRemoteUrls`，否則圖磚全被擋掉而且**沒有任何錯誤訊息**。
+- **工具列刻意做在 Qt 這一側**而不是 HTML 裡，這樣搜尋框/下拉選單/核取方塊直接吃 qt-material
+  的樣式，不必在 `map.css` 裡再複製一套跟著主題切換的控制項樣式。
+- **編輯鎖**：`_sync_btn_states()` 在 `pending_action` 為 `forward`/`reverse` 時送 `edit_locked(True)`。
+  固定定位「保持中」（`_walk_pin()` 注入完已把 `pending_action` 設回 `pause`）**不算移動中**，
+  此時在地圖上點新座標會由 `_reinject_pin_if_holding()` 立刻重新注入一次，人就直接搬過去。
+- **軌跡**：`session.position_changed` 每次 `sim.set()` 後 emit，`map.js` 用 `polyline.addLatLng()`
+  累加；超過 `TRAIL_MAX_POINTS`(3000) 就每兩點抽一點，循環模式跑整夜也不會累積出巨大的 polyline。
+- **跟隨**：使用者手動拖動地圖（`dragstart`）會自動關閉跟隨並回報 Python 同步核取方塊；
+  `panTo()` 不觸發 `dragstart`，所以程式自己的平移不會誤關。
+- **圖磚**：`TILE_SOURCES` 內建 OSM／CartoDB Positron／Dark Matter／自訂 URL，預設 `"auto"`
+  跟著主題換（深色配 Dark Matter、淺色配 Positron）；使用者手動選過就固定下來不再跟著主題跑。
+  Leaflet 原生支援 `{s}`／`{r}`，不需要自己展開。**這些公用圖磚僅供輕量使用且必須保留 attribution。**
+- **地名搜尋刻意由 Python 端發送**（[geocode.py](gps_qt/geocode.py) 用 `QNetworkAccessManager`）：
+  Nominatim 政策要求可識別的 User-Agent 且每秒最多 1 次，在 QWebEngine 裡 `fetch()` 帶的是瀏覽器
+  UA，改不掉也不合規。route 模式搜尋只帶視野過去，**不自動加點**。
+- **Leaflet 本地化**在 `web/vendor/`：純靠 CDN 時斷網會整頁白，本地化後控制項仍在，
+  只有圖磚空白並由 `tileerror` 顯示提示橫幅。
+
+### 路徑規劃：Valhalla + Douglas-Peucker
+`interpolate_points()` 在兩點之間走的是**直線**；要沿實際道路走就必須有路網資料，
+這由 [routing.py](gps_qt/routing.py)（查詢）與 [route_planner.py](gps_qt/widgets/route_planner.py)（互動）負責。
+
+- **服務是 Valhalla 的 FOSSGIS 公用實例**，不需要 API 金鑰，支援 `pedestrian`／`bicycle`／`auto`
+  三種 costing。**這是社群維運的免費服務，政策是「合理使用」**，不要拿來做批次查詢。
+- **`shape` 是精度 1e6 的 polyline**（一般的 Google polyline 是 1e5）。用錯精度不會報錯，
+  只會讓座標差十倍，所以 `POLYLINE_PRECISION` 寫成具名常數，並有一個測試專門釘住這件事。
+- **多個 leg 的接縫點會重複**（前一段的終點等於下一段的起點），`parse_route()` 會去掉重複的
+  那一個，否則路線裡會出現距離為零的相鄰點。
+- **回傳的轉彎點動輒上百上千個**（實測台中火車站→台灣大道三段 3.3 公里有 132 點），直接塞進
+  座標表格會難以手動微調，所以用 `geo.douglas_peucker()` 抽稀，預設容差 5 公尺（實測降到 22 點，
+  路形肉眼看不出差別）。`douglas_peucker()` **刻意用顯式堆疊而非遞迴**：遞迴版深度最壞等於點數，
+  上千點會撞到 Python 的遞迴上限。
+- **點選狀態機在 `RoutePlanner`**（IDLE → PICKING_START → PICKING_END → ROUTING），刻意不放在
+  `MapPanel` 裡：後者的職責是「顯示地圖並轉發互動」，混進來會讓它膨脹到不好讀。`MapPanel._on_map_clicked()`
+  一律先問過 `route_planner.handle_map_click()`，**被吃掉就不能再當成新增座標點**——新增任何
+  「會攔截地圖點擊」的功能都要沿用這個「攔截成功才吃掉事件」的形狀。
+- 切到固定定位模式或模擬開始移動（編輯鎖）時都要呼叫 `route_planner.cancel()`，否則按鈕會卡在
+  「請點選終點」卻永遠等不到點擊。
 
 ### 非同步整合：qasync
 [main.py](gps_qt/main.py) 用 `qasync.QEventLoop` 包住 `QApplication` 並 `asyncio.set_event_loop(loop)`，讓 asyncio
@@ -112,6 +195,14 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
   對應 qt-material 內建的 `QPushButton.danger`／`.success` 規則（靠 Qt 動態屬性 `class` 選取，這點已用
   offscreen 平台實際渲染截圖驗證過，不是靠猜的）。`mark_class()` 呼叫完一定要 `unpolish()`/`polish()`
   才會重新計算樣式。
+- **下拉選單會截字的陷阱**：qt-material 的 `QComboBox::drop-down { width: 20px }` 與
+  `QComboBox::down-arrow { margin-right: 8px }` 畫在文字區右側，但 `QComboBox` 只有
+  `padding-left`、沒有對應的右側 padding，`sizeHint()` 也沒把這塊完整計入；再加上
+  `QComboBox` 預設的 `AdjustToContentsOnFirstShow` 只在第一次顯示時算一次寬度就鎖死
+  （而 `MainWindow` 在 `_build_ui()` 之後還會再套用一次主題，路徑規劃列又是切到路線模式
+  才顯示），選項文字一長就會被箭頭壓掉一截。**所有 `QComboBox` 一律要過一次
+  `theme.fit_combo_width()`**（設 `AdjustToContents` + 補 `COMBO_ARROW_ALLOWANCE`），
+  不要自己 `setMinimumWidth()` 寫死像素。與 `_fix_to_hint()` 同樣必須在 `theme.apply()` 之後呼叫。
 - 同一套機制還有一個 `.no-uppercase { text-transform: none; }`：qt-material 預設會把按鈕文字轉成大寫，
   速度預設按鈕（「步行 5 km/h」）這種含單位的文字被轉大寫後會變成「5 KM/H」，所以用
   `mark_class(btn, "no-uppercase")` 擋掉。
@@ -178,3 +269,8 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
 大數字讓 Qt 依可用空間等比例換算成 50/50。執行日誌面板高度不手動計算，交給 `QVBoxLayout` 原生分配
 剩餘空間。整個中央 widget 再用 `QScrollArea(setWidgetResizable(True))` 包一層，視窗縮到很小時仍可捲動
 看到全部內容。
+
+右欄內部的垂直配額由 `MAP_STRETCH`(3) 與 `COORDS_STRETCH`(2) 決定，地圖另有 `MAP_MIN_HEIGHT`(320)
+的下限。座標面板要不要顯示由 `_sync_coord_panels()` 一處判斷——「目前模式」與「是否收合」是兩個
+獨立條件，分散到 `_switch_mode()` 與收合按鈕各自 `show()`/`hide()` 的話，收合狀態下切換模式會把
+面板又叫回來。

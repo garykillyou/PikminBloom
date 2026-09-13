@@ -56,6 +56,51 @@ def load_saved_route(settings):
     return route
 
 
+DEFAULT_MAP_SETTINGS = {
+    "tile_source": "auto",       # "auto" 跟隨主題；其餘見 widgets/map_panel.py 的 TILE_SOURCES
+    "custom_tile_url": "",
+    "custom_attribution": "",
+    "center": [24.1368, 120.6862],
+    "zoom": 15,
+    "follow": True,
+    "routing_costing": "pedestrian",  # 路徑規劃的移動方式，見 widgets/route_planner.py
+    "simplify_m": 5.0,                # 規劃結果的抽稀容差（公尺），0 為不簡化
+}
+
+
+def load_map_settings(settings):
+    """讀出 settings["map"]，補齊缺漏或型別不對的欄位後放回 settings。
+
+    回傳的 dict 就是 settings["map"] 本身（同一個物件），MapPanel 會在使用者
+    平移地圖、切換圖磚時就地更新它，關閉視窗時隨 save_settings() 一起寫回，
+    不需要另外再收集一次。
+    """
+    raw = settings.get("map")
+    result = dict(DEFAULT_MAP_SETTINGS)
+    if isinstance(raw, dict):
+        for key, default in DEFAULT_MAP_SETTINGS.items():
+            value = raw.get(key, default)
+            if isinstance(default, bool):
+                result[key] = bool(value)
+            elif isinstance(default, str):
+                result[key] = str(value)
+            elif key == "center":
+                if isinstance(value, (list, tuple)) and len(value) == 2:
+                    try:
+                        result[key] = [float(value[0]), float(value[1])]
+                    except (TypeError, ValueError):
+                        pass
+            else:
+                # 其餘是數值欄位（zoom 為 int、simplify_m 為 float），
+                # 型別跟著預設值走，新增欄位時不必再回來改這裡。
+                try:
+                    result[key] = type(default)(value)
+                except (TypeError, ValueError):
+                    pass
+    settings["map"] = result
+    return result
+
+
 def _kml_tag(elem):
     """去掉 XML namespace，取得元素的原始標籤名稱"""
     return elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag

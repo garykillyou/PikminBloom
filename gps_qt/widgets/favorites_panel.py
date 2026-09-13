@@ -51,6 +51,8 @@ class _ElidingLabel(QLabel):
 
 class FavoritesPanel(QFrame):
     load_requested = Signal(dict)
+    # 清單內容或篩選模式變動（新增/改名/刪除/切換模式），讓地圖重畫最愛圖層。
+    favorites_changed = Signal()
 
     def __init__(self, pin_provider, route_provider, mode_provider, parent=None):
         super().__init__(parent)
@@ -85,6 +87,10 @@ class FavoritesPanel(QFrame):
         self.refresh()
 
     def refresh(self):
+        self._rebuild_list()
+        self.favorites_changed.emit()
+
+    def _rebuild_list(self):
         self.list_widget.clear()
         current_type = "pin" if self._mode_provider() == "pin" else "route"
         self._save_pin_btn.setVisible(current_type == "pin")

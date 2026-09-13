@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from .. import persistence, theme, window_geometry
 from ..session import GPSSession
 from .favorites_panel import FavoritesPanel
+from .map_panel import MapPanel
 from .pin_panel import PinPanel
 from .route_panel import DEFAULT_SPEED_KMH, RoutePanel
 
@@ -29,6 +30,10 @@ DEFAULT_ROUTE = [
 
 WIDE_LAYOUT_BREAKPOINT = 1000
 
+# 右欄的垂直配額：地圖是主體，座標面板佔比較小的一塊（可整個收合把空間讓給地圖）。
+MAP_STRETCH = 3
+COORDS_STRETCH = 2
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -40,6 +45,9 @@ class MainWindow(QMainWindow):
         self.mode = "route"
 
         route = persistence.load_saved_route(self.settings) or [list(r) for r in DEFAULT_ROUTE]
+        # 回傳的就是 settings["map"] 本身，MapPanel 會就地更新它，closeEvent 一起寫回。
+        self.map_settings = persistence.load_map_settings(self.settings)
+        self._coords_collapsed = False
 
         self.setWindowTitle("iPhone GPS 路線模擬器")
         self.setMinimumSize(window_geometry.MIN_WINDOW_W, window_geometry.MIN_WINDOW_H)
@@ -66,6 +74,8 @@ class MainWindow(QMainWindow):
         self.session.paused.connect(self._sync_btn_states)
         self.session.session_ended.connect(self._on_session_ended)
         self.session.direction_changed.connect(self._sync_btn_states)
+        self.session.position_changed.connect(self.map_panel.set_position)
+        self._connect_map()
         self._switch_mode("route")
         self._sync_btn_states()
 
@@ -157,11 +167,19 @@ class MainWindow(QMainWindow):
         mode_row.addStretch(1)
         right_layout.addLayout(mode_row)
 
+        self.map_panel = MapPanel(self.map_settings, self.theme_name)
+        right_layout.addWidget(self.map_panel, MAP_STRETCH)
+
+        self.coords_toggle_btn = QPushButton()
+        theme.mark_class(self.coords_toggle_btn, "no-uppercase")
+        self.coords_toggle_btn.clicked.connect(self._toggle_coords)
+        right_layout.addWidget(self.coords_toggle_btn)
+
         self.pin_panel = PinPanel()
-        right_layout.addWidget(self.pin_panel)
+        right_layout.addWidget(self.pin_panel, COORDS_STRETCH)
         speed_kmh = self.settings.get("speed_kmh", DEFAULT_SPEED_KMH)
         self.route_panel = RoutePanel(route, initial_speed=speed_kmh)
-        right_layout.addWidget(self.route_panel)
+        right_layout.addWidget(self.route_panel, COORDS_STRETCH)
 
         self.splitter.addWidget(right_col)
         self.splitter.setStretchFactor(0, 1)
@@ -179,6 +197,8 @@ class MainWindow(QMainWindow):
     def _apply_theme(self):
         theme.apply(QApplication.instance(), self.theme_name)
         self.theme_btn.setText("切換淺色" if self.theme_name == "dark" else "切換深色")
+        # 圖磚設定為「自動」時要跟著主題換成淺色/深色底圖。
+        self.map_panel.apply_theme(self.theme_name)
 
     def _toggle_theme(self):
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
@@ -189,28 +209,131 @@ class MainWindow(QMainWindow):
     # ── 模式切換 ────────────────────
     def _switch_mode(self, mode):
         self.mode = mode
-        if mode == "route":
-            self.pin_panel.hide()
-            self.route_panel.show()
-            self.start_btn.setText("開始模擬")
-        else:
-            self.route_panel.hide()
-            self.pin_panel.show()
-            self.start_btn.setText("固定定位")
+        self.start_btn.setText("開始模擬" if mode == "route" else "固定定位")
+        self._sync_coord_panels()
+        self.map_panel.set_mode(mode)
         self.route_mode_btn.setChecked(mode == "route")
         self.pin_mode_btn.setChecked(mode == "pin")
         self._update_return_btn_state()
+        # refresh() 會 emit favorites_changed，順帶更新地圖的最愛圖層（只有 pin 模式有）。
         self.favorites_panel.refresh()
+
+    def _toggle_coords(self):
+        self._coords_collapsed = not self._coords_collapsed
+        self._sync_coord_panels()
+
+    def _sync_coord_panels(self):
+        """依「目前模式」與「是否收合」決定顯示哪一個座標面板。
+
+        這兩個是各自獨立的條件，集中在這裡一起判斷；分散到 _switch_mode() 與
+        收合按鈕各自 show()/hide() 的話，收合狀態下切換模式會把面板又叫回來。
+        """
+        expanded = not self._coords_collapsed
+        self.pin_panel.setVisible(expanded and self.mode == "pin")
+        self.route_panel.setVisible(expanded and self.mode == "route")
+        name = "固定座標" if self.mode == "pin" else "路線座標點"
+        self.coords_toggle_btn.setText(("▾ 收合 " if expanded else "▸ 展開 ") + name)
 
     def _load_favorite(self, fav):
         if fav["type"] == "pin":
             self.pin_panel.lat_spin.setValue(fav["lat"])
             self.pin_panel.lon_spin.setValue(fav["lon"])
             self._switch_mode("pin")
+            self.map_panel.fit_to([[fav["lat"], fav["lon"]]])
         else:
             self.route_panel.set_route([list(r) for r in fav["route"]])
             self._switch_mode("route")
+            self.map_panel.fit_to([[r[0], r[1]] for r in fav["route"]])
+        # 換了地點/路線，先前的軌跡已經沒有參考價值。
+        self.map_panel.clear_trail()
         self._log(f"已載入：{fav['name']}")
+
+    # ── 地圖連動 ────────────────────
+    def _connect_map(self):
+        """把地圖上的操作接到既有的路線模型／固定座標欄位，並讓兩邊互相同步。
+
+        資料 -> 地圖：模型任何變動都回推一次完整路線。回授迴圈由兩層擋住——
+        MapPanel 會把同一輪事件迴圈裡的多次推送合併成一次，map.js 再比對
+        「JSON 與上次相同就跳過重繪」，所以「推過去又被推回來」不會無限繞。
+        """
+        self.map_panel.log.connect(self._log)
+        self.map_panel.map_clicked.connect(self._on_map_clicked)
+        self.map_panel.point_moved.connect(self.route_panel.move_point)
+        self.map_panel.point_delete_requested.connect(self.route_panel.delete_point)
+        self.map_panel.pin_dragged.connect(self._apply_map_coordinates)
+        self.map_panel.favorite_activated.connect(self._on_map_favorite_activated)
+        self.map_panel.location_searched.connect(self._on_location_searched)
+        self.map_panel.route_computed.connect(self._on_route_computed)
+
+        model = self.route_panel.model
+        model.dataChanged.connect(self._push_route_to_map)
+        model.rowsInserted.connect(self._push_route_to_map)
+        model.rowsRemoved.connect(self._push_route_to_map)
+        model.modelReset.connect(self._push_route_to_map)
+        self.pin_panel.lat_spin.valueChanged.connect(self._push_pin_to_map)
+        self.pin_panel.lon_spin.valueChanged.connect(self._push_pin_to_map)
+        self.favorites_panel.favorites_changed.connect(self._push_favorites_to_map)
+
+        self._push_route_to_map()
+        self._push_pin_to_map()
+
+    def _push_route_to_map(self, *_args):
+        self.map_panel.set_route(self.route_panel.route)
+
+    def _push_pin_to_map(self, *_args):
+        self.map_panel.set_pin(*self.pin_panel.coordinates())
+
+    def _push_favorites_to_map(self):
+        # 只有固定定位模式才在地圖上畫最愛，而且只畫地點最愛：路線最愛會是一整條
+        # 疊在編輯中路線上的線，分不出哪條是哪條，反而干擾。route 模式送空清單
+        # 把圖層清掉。
+        favorites = self.favorites_panel.favorites if self.mode == "pin" else []
+        self.map_panel.set_favorites(favorites)
+
+    def _on_map_clicked(self, lat, lon):
+        if self.mode == "pin":
+            self._apply_map_coordinates(lat, lon)
+            return
+        self.route_panel.add_point_at(lat, lon)
+
+    def _apply_map_coordinates(self, lat, lon):
+        self.pin_panel.lat_spin.setValue(lat)
+        self.pin_panel.lon_spin.setValue(lon)
+        self._reinject_pin_if_holding()
+
+    def _reinject_pin_if_holding(self):
+        """固定定位保持中時改座標就立刻重新注入，讓地圖上點一下人就搬過去。
+
+        _walk_pin() 注入完座標會把 pending_action 設回 "pause"（連線仍然在），
+        所以「session_active 且 pending_action 為 pause」就代表正在保持中。
+        移動模式（forward/reverse）本來就會被地圖的編輯鎖擋住，走不到這裡。
+        """
+        if self.mode != "pin" or not self.session.session_active:
+            return
+        if self.session.pending_action != "pause":
+            return
+        self.session.start_forward()
+        self._sync_btn_states()
+
+    def _on_map_favorite_activated(self, index):
+        favorites = self.favorites_panel.favorites
+        if 0 <= index < len(favorites):
+            self._load_favorite(favorites[index])
+
+    def _on_route_computed(self, route):
+        """路徑規劃算完，整條取代目前路線。
+
+        set_route() 會觸發 modelReset，路線自然會回推到地圖；這裡另外把視野拉到
+        新路線的範圍，並清掉先前的軌跡——路線都換了，舊軌跡已經沒有參考價值。
+        """
+        self.route_panel.set_route([list(point) for point in route])
+        self.map_panel.fit_to([[point[0], point[1]] for point in route])
+        self.map_panel.clear_trail()
+
+    def _on_location_searched(self, lat, lon, _name):
+        # route 模式只是把視野帶過去，不自動加點——搜尋是為了找路，不是為了加節點。
+        if self.mode == "pin":
+            self._apply_map_coordinates(lat, lon)
 
     # ── 控制按鈕 ────────────────────
     def _start(self):
@@ -246,6 +369,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "請先按「停止」，再恢復真實定位")
             return
         self.session.restore_real_location()
+        self.map_panel.clear_trail()
         self._sync_btn_states()
         self._log("恢復真實定位中...")
 
@@ -266,6 +390,9 @@ class MainWindow(QMainWindow):
         # 「恢復真實定位」沒有意義，初始化時只留「開始模擬」可以點擊。
         self.restore_btn.setEnabled(self.session.session_active and not busy)
         self._update_return_btn_state()
+        # 模擬移動中鎖住地圖編輯，避免走到一半路線被改掉；固定定位「保持中」
+        # （pending_action 已回到 pause）不算移動中，仍可在地圖上點選新座標。
+        self.map_panel.set_locked(self.session.pending_action in ("forward", "reverse"))
 
     def _update_return_btn_state(self):
         # 返回鈕現在只是「切換方向」，正在返回中也要能再按一次切回前進，

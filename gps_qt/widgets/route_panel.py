@@ -77,7 +77,7 @@ class RoutePanel(QFrame):
         self.table.setColumnWidth(COL_DELETE, 56)
         self.table.verticalHeader().setVisible(False)
         self.delete_delegate = DeleteButtonDelegate(self.table)
-        self.delete_delegate.delete_requested.connect(self._delete_point)
+        self.delete_delegate.delete_requested.connect(self.delete_point)
         self.table.setItemDelegateForColumn(COL_DELETE, self.delete_delegate)
         layout.addWidget(self.table)
 
@@ -102,7 +102,19 @@ class RoutePanel(QFrame):
         last = route[-1] if route else [24.0, 121.0, "新增點"]
         self.model.insert_point([last[0] + 0.001, last[1] + 0.001, "新增點"])
 
-    def _delete_point(self, row):
+    def add_point_at(self, lat, lon, note=""):
+        """在路線尾端加一個點（地圖點擊用）。"""
+        self.model.insert_point([lat, lon, note])
+
+    def move_point(self, row, lat, lon):
+        """更新某個點的座標（地圖拖曳節點用）。"""
+        self.model.set_coordinates(row, lat, lon)
+
+    def delete_point(self, row):
+        """刪除某個點。剩 2 個點時直接忽略：路線至少要兩點才能內插，UI 層先擋掉。
+
+        表格的刪除欄與地圖節點的彈出視窗都走這裡，兩邊共用同一道下限檢查。
+        """
         if len(self.model._route) <= 2:
             return
         self.model.remove_point(row)

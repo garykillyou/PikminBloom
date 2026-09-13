@@ -79,6 +79,20 @@ class RouteTableModel(QAbstractTableModel):
             self._on_changed()
         return True
 
+    def set_coordinates(self, row, lat, lon):
+        """一次更新一列的經緯度（地圖拖曳節點用）。
+
+        只發一次 dataChanged（涵蓋緯度到經度兩欄），而不是分兩次 setData()，
+        避免拖曳一個點就觸發兩輪「回推路線給地圖」。
+        """
+        if not (0 <= row < len(self._route)):
+            return
+        self._route[row][0] = lat
+        self._route[row][1] = lon
+        self.dataChanged.emit(self.index(row, COL_LAT), self.index(row, COL_LON))
+        if self._on_changed:
+            self._on_changed()
+
     def set_route(self, route):
         self.beginResetModel()
         self._route = route

@@ -7,6 +7,10 @@ GPSSession 的 async/await 狀態機因此不需要背景 thread。
 import asyncio
 import sys
 
+# QtWebEngineWidgets 必須在建立 QApplication 之前 import：Qt 6 在這個模組載入時
+# 才會設定 AA_ShareOpenGLContexts，順序反了地圖面板會無法初始化（Qt 會直接中止）。
+# 這行看起來沒被用到但不能刪，也不要被自動排序工具搬到 QApplication 之後。
+import PySide6.QtWebEngineWidgets  # noqa: F401  isort:skip
 from PySide6.QtWidgets import QApplication
 from qasync import QEventLoop
 

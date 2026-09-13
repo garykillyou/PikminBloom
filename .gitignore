@@ -31,3 +31,6 @@ env/
 Thumbs.db
 desktop.ini
 open_cmd_as_admin.bat
+
+# 測試快取
+.pytest_cache/

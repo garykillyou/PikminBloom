@@ -6,7 +6,7 @@ qt-material 最新版本身沒有版本限制問題（純 Python，任何 Qt bin
 """
 
 import qt_material
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QComboBox
 
 THEME_FILES = {"dark": "dark_red.xml", "light": "light_red.xml"}
 
@@ -44,6 +44,33 @@ def apply(app: QApplication, theme_name: str):
     )
     extra_qss = EXTRA_QSS_TEMPLATE.format(app_title=FS_TITLE, section_title=FS_SECTION_TITLE)
     app.setStyleSheet(app.styleSheet() + extra_qss)
+
+
+# qt-material 的 QComboBox 規則把下拉箭頭畫在文字區右側：
+#   QComboBox::drop-down { width: 20px; }
+#   QComboBox::down-arrow { margin-right: 8px; }
+# 而 QComboBox 本身只有 padding-left，沒有對應的右側 padding，sizeHint() 也沒有
+# 把這塊完整計入，所以選項文字一長就會被箭頭壓掉一截。這個數字直接對應上面那
+# 兩條 QSS 規則（20 + 8），改動主題樣式表時要一起確認。
+COMBO_ARROW_ALLOWANCE = 28
+
+
+def fit_combo_width(combo):
+    """讓下拉選單寬到足以完整顯示最長的選項文字。
+
+    處理兩件事：
+    (a) QComboBox 預設的 AdjustToContentsOnFirstShow 只在「第一次顯示」時算一次
+        寬度就鎖死，之後即使樣式表重新套用也不會更新——而 MainWindow 在
+        _build_ui() 之後還會再呼叫一次 theme.apply()，路徑規劃列又是切到路線模式
+        才顯示的，很容易在錯誤的時機把寬度定死。改成 AdjustToContents。
+    (b) 補上 (a) 之後 sizeHint() 仍然少算的箭頭區域（見 COMBO_ARROW_ALLOWANCE）。
+
+    和 favorites_panel 的 _fix_to_hint() 同一個道理：必須在 theme.apply() 套用
+    樣式表「之後」呼叫，sizeHint() 才會反映正確的 padding。
+    """
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+    combo.setMinimumWidth(combo.sizeHint().width() + COMBO_ARROW_ALLOWANCE)
+    return combo
 
 
 def style_section_title(label):

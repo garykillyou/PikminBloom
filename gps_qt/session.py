@@ -24,6 +24,7 @@ class GPSSession(QObject):
     paused = Signal()                # 暫停/返回中斷後（對應原本 _on_paused）
     session_ended = Signal()         # 連線真正結束（對應原本 _on_session_ended）
     direction_changed = Signal()     # 循環模式在端點自動折返，方向被動改變
+    position_changed = Signal(float, float)  # 每次實際注入座標（地圖即時位置/軌跡用）
 
     def __init__(self, route_provider, speed_provider, pin_provider, mode_provider, loop_provider):
         """
@@ -124,6 +125,7 @@ class GPSSession(QObject):
         lat, lon = self._pin_provider()
         self.log.emit(f"固定位置：{lat:.6f}, {lon:.6f}")
         await sim.set(lat, lon)
+        self.position_changed.emit(lat, lon)
         self.progress_value.emit(1.0)
         self.progress_label.emit(f"固定中  {lat:.6f}, {lon:.6f}")
         self.log.emit("定位已固定！按「停止」可保持在目前座標")
@@ -157,6 +159,7 @@ class GPSSession(QObject):
                     break
                 lat, lon = points[i]
                 await sim.set(lat, lon)
+                self.position_changed.emit(lat, lon)
                 idx = i
                 self.point_idx = i
                 frac = (i + 1) / total if direction == 1 else i / total

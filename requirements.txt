@@ -1,4 +1,6 @@
 pymobiledevice3>=11.12.4
+# 地圖面板需要 QtWebEngine / QtWebChannel / QtNetwork，這些在 PySide6-Addons 裡；
+# 完整的 PySide6 套件已包含 Addons，但若環境裝的是 PySide6-Essentials 就會缺。
 PySide6>=6.7
 qasync>=0.27
 qt-material>=2.14

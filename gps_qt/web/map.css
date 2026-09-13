@@ -1,0 +1,163 @@
+/* 地圖頁面樣式。依專案規範，所有樣式集中在這裡，map.html 內不寫 inline style。
+   顏色刻意不跟 qt-material 主題連動：地圖標記要在淺色/深色圖磚上都看得清楚，
+   因此使用自帶對比（深色描邊 + 高彩度填色）的固定色票。 */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+  background: #2b2b2b;
+}
+
+/* ── 提示橫幅（編輯鎖定、圖磚載入失敗） ── */
+.banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  padding: 6px 16px;
+  border-radius: 14px;
+  background: rgba(20, 20, 20, 0.82);
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.banner-hidden {
+  display: none;
+}
+
+/* ── 路線節點標記 ── */
+.route-pin {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #e53935;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+}
+
+.route-pin-locked {
+  background: #8d6e63;
+}
+
+/* 起點與終點另外標色，方向一眼可辨 */
+.route-pin-start {
+  background: #43a047;
+}
+
+.route-pin-end {
+  background: #1e88e5;
+}
+
+/* ── 固定定位標記 ── */
+.pin-marker {
+  width: 30px;
+  height: 30px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: #fb8c00;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+/* ── 路徑規劃：點選起訖點 ── */
+/* Leaflet 自己會在容器上設 grab 游標，要蓋過去才會變成十字準心 */
+.map-picking {
+  cursor: crosshair !important;
+}
+
+.pick-pin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #7e57c2;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+}
+
+/* ── 目前模擬位置（脈動圓點） ── */
+.current-marker {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #00e5ff;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.7);
+  animation: current-pulse 1.6s ease-out infinite;
+}
+
+@keyframes current-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.7); }
+  70% { box-shadow: 0 0 0 16px rgba(0, 229, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0); }
+}
+
+/* ── 折線（用 Leaflet 的 className 選項掛上，顏色/線寬由 CSS 決定） ── */
+.route-line {
+  stroke: #e53935;
+  stroke-width: 4;
+  stroke-opacity: 0.85;
+  fill: none;
+}
+
+.trail-line {
+  stroke: #00e5ff;
+  stroke-width: 5;
+  stroke-opacity: 0.6;
+  fill: none;
+}
+
+.fav-pin-marker {
+  stroke: #fff;
+  stroke-width: 2;
+  fill: #9c27b0;
+  fill-opacity: 0.55;
+}
+
+/* ── 節點彈出視窗 ── */
+.pt-title {
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.pt-coord {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-bottom: 6px;
+}
+
+.pt-delete {
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: #e53935;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pt-delete:disabled {
+  background: #9e9e9e;
+  cursor: not-allowed;
+}

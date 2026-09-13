@@ -12,6 +12,59 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+METERS_PER_DEGREE = math.radians(1) * 6371000  # 緯度 1 度約 111194.9 公尺
+
+
+def _perpendicular_distance_m(point, start, end):
+    """point 到 start-end 線段的垂直距離（公尺）。
+
+    用等距長方投影把經緯度換成平面座標再算：路徑規劃回傳的相鄰點間距通常只有
+    幾十公尺，在這個尺度下投影誤差遠小於簡化容差本身，不值得為此做球面幾何。
+    """
+    scale_x = math.cos(math.radians(start[0])) * METERS_PER_DEGREE
+    px = (point[1] - start[1]) * scale_x
+    py = (point[0] - start[0]) * METERS_PER_DEGREE
+    ex = (end[1] - start[1]) * scale_x
+    ey = (end[0] - start[0]) * METERS_PER_DEGREE
+    segment_len_sq = ex * ex + ey * ey
+    if segment_len_sq == 0:
+        return math.hypot(px, py)
+    t = max(0.0, min(1.0, (px * ex + py * ey) / segment_len_sq))
+    return math.hypot(px - t * ex, py - t * ey)
+
+
+def douglas_peucker(points, tolerance_m):
+    """用 Douglas-Peucker 演算法抽稀座標點，保留路形。
+
+    路徑規劃服務回傳的轉彎點動輒上千個，直接塞進座標表格會難以手動微調；
+    容差 5 公尺左右就能把點數降到幾十個，而路形肉眼幾乎看不出差別。
+    tolerance_m <= 0 代表不簡化，原樣回傳。
+
+    刻意用顯式堆疊而非遞迴：點數可能上千，遞迴版的深度最壞會等於點數，
+    會撞到 Python 預設的遞迴上限。
+    """
+    if tolerance_m <= 0 or len(points) <= 2:
+        return list(points)
+
+    keep = [False] * len(points)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(points) - 1)]
+    while stack:
+        first, last = stack.pop()
+        if last <= first + 1:
+            continue
+        max_dist, farthest = 0.0, first
+        for i in range(first + 1, last):
+            dist = _perpendicular_distance_m(points[i], points[first], points[last])
+            if dist > max_dist:
+                max_dist, farthest = dist, i
+        if max_dist > tolerance_m:
+            keep[farthest] = True
+            stack.append((first, farthest))
+            stack.append((farthest, last))
+    return [point for point, kept in zip(points, keep) if kept]
+
+
 def interpolate_points(route, speed_ms, interval_sec):
     points = []
     for i in range(len(route) - 1):
