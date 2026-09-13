@@ -23,6 +23,7 @@ class GPSSession(QObject):
     progress_label = Signal(str)
     paused = Signal()                # 暫停/返回中斷後（對應原本 _on_paused）
     session_ended = Signal()         # 連線真正結束（對應原本 _on_session_ended）
+    direction_changed = Signal()     # 循環模式在端點自動折返，方向被動改變
 
     def __init__(self, route_provider, speed_provider, pin_provider, mode_provider, loop_provider):
         """
@@ -53,7 +54,9 @@ class GPSSession(QObject):
         self.pending_action = "pause"
 
     def reverse(self):
-        self.pending_action = "reverse"
+        # 單純切換方向：目前不是在往回走就切成往回走，已經在往回走就切回
+        # 前進——不再是「固定走到起點才停」的一次性動作。
+        self.pending_action = "forward" if self.pending_action == "reverse" else "reverse"
         self._ensure_task()
 
     def restore_real_location(self):
@@ -129,11 +132,11 @@ class GPSSession(QObject):
     async def _walk_route(self, sim, direction):
         """direction=1 往路線終點走，direction=-1 往路線起點走回去。
         走到一半若 pending_action 被改成別的值（暫停/切換方向/斷線），會立刻
-        中斷並把目前位置留在 self.point_idx，交回外層迴圈處理。循環模式只由
-        「開始」啟動的 forward 觸發：走到終點後自動折返走回起點，如此來回
-        往復，直到 pending_action 被改成別的值。"""
+        中斷並把目前位置留在 self.point_idx，交回外層迴圈處理。不論這趟是由
+        「開始」還是「返回」觸發，每次走到終點/起點時都會即時讀取循環開關，
+        決定要不要折返繼續走，如此來回往復，直到 pending_action 被改成別的
+        值——因此使用者可以在路上隨時勾選/取消勾選，下次抵達端點就會生效。"""
         action_name = "forward" if direction == 1 else "reverse"
-        loop_mode = self._loop_provider() if direction == 1 else False
         if direction == -1:
             self.log.emit("返回中，沿路線往回走...")
 
@@ -164,12 +167,19 @@ class GPSSession(QObject):
             if interrupted:
                 return
 
-            if loop_mode and self.pending_action == action_name:
+            # 走到端點才即時讀取循環開關，而不是在函式一開始就快取，這樣
+            # 使用者中途勾選/取消勾選才會在下一次抵達端點時生效。
+            if self.pending_action == action_name and self._loop_provider():
                 if direction == 1:
                     self.log.emit("循環模式：已抵達終點，沿路線折返")
                 else:
                     self.log.emit("循環模式：已回到起點，再次出發")
                 direction = -direction
+                # 折返後，方向被動改變，pending_action/action_name 要跟著
+                # 更新，「往起點」/「往終點」按鈕文字才不會停留在舊方向。
+                action_name = "forward" if direction == 1 else "reverse"
+                self.pending_action = action_name
+                self.direction_changed.emit()
                 idx = max(0, min(idx + direction, total - 1))
                 self.point_idx = idx
                 continue

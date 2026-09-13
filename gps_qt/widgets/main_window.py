@@ -64,8 +64,10 @@ class MainWindow(QMainWindow):
         self.session.progress_value.connect(lambda v: self.progress_bar.setValue(int(v * 1000)))
         self.session.progress_label.connect(self.progress_label.setText)
         self.session.paused.connect(self._sync_btn_states)
-        self.session.session_ended.connect(self._sync_btn_states)
+        self.session.session_ended.connect(self._on_session_ended)
+        self.session.direction_changed.connect(self._sync_btn_states)
         self._switch_mode("route")
+        self._sync_btn_states()
 
         if maximize:
             self.showMaximized()
@@ -98,7 +100,7 @@ class MainWindow(QMainWindow):
         self.start_btn = QPushButton("開始模擬")
         self.start_btn.clicked.connect(self._start)
         btn_row.addWidget(self.start_btn)
-        self.return_btn = QPushButton("返回")
+        self.return_btn = QPushButton("往起點")
         self.return_btn.clicked.connect(self._reverse)
         btn_row.addWidget(self.return_btn)
         self.stop_btn = QPushButton("停止")
@@ -230,7 +232,10 @@ class MainWindow(QMainWindow):
             return
         self.session.reverse()
         self._sync_btn_states()
-        self._log("返回：從目前座標往回走...")
+        if self.session.pending_action == "reverse":
+            self._log("已切換方向：往起點走...")
+        else:
+            self._log("已切換方向：往終點走...")
 
     def _restore_real_location(self):
         if not self.session.session_active:
@@ -243,16 +248,43 @@ class MainWindow(QMainWindow):
         self._sync_btn_states()
         self._log("恢復真實定位中...")
 
+    def _on_session_ended(self):
+        # 連線已結束（正常斷線或中途出錯），把動作歸零再同步按鈕狀態，
+        # 否則殘留的 "disconnect" 會讓按鈕全部卡在停用。
+        self.session.pending_action = "pause"
+        self._sync_btn_states()
+
     def _sync_btn_states(self):
         busy = self.session.pending_action in ("forward", "reverse", "disconnect")
+        # 固定定位模式啟動後會立刻回到 "pause"（保持在目前座標），此時連線
+        # 仍在，「停止」要維持可按，否則會跟 _walk_pin() 的提示訊息互相矛盾。
+        holding = self.session.session_active and self.session.pending_action == "pause"
         self.start_btn.setEnabled(not busy)
-        self.stop_btn.setEnabled(self.session.pending_action in ("forward", "reverse"))
-        self.restore_btn.setEnabled(not busy)
+        self.stop_btn.setEnabled(self.session.pending_action in ("forward", "reverse") or holding)
+        # 從未成功連線（尚未按過「開始模擬」，或已恢復真實定位斷線）時，
+        # 「恢復真實定位」沒有意義，初始化時只留「開始模擬」可以點擊。
+        self.restore_btn.setEnabled(self.session.session_active and not busy)
         self._update_return_btn_state()
 
     def _update_return_btn_state(self):
-        enabled = self.mode == "route" and self.session.pending_action not in ("reverse", "disconnect")
+        # 返回鈕現在只是「切換方向」，正在返回中也要能再按一次切回前進，
+        # 所以不再因 pending_action == "reverse" 而停用。「已啟動」不能只
+        # 看 session_active——那要等背景協程實際連上裝置才會變 True，
+        # 沒有訊號通知 UI，會卡到按「停止」觸發 paused 訊號才更新。改用
+        # pending_action 是否已經是 forward/reverse：按下「開始模擬」當下
+        # 就同步變成 forward，可以立刻切換方向，不用等連線完成。初始化時
+        # （尚未按過「開始模擬」）兩者皆為否，只留「開始模擬」可以點擊。
+        # 文字顯示「按下去會往哪裡走」：目前正往起點走就顯示「往終點」，
+        # 否則顯示「往起點」。
+        moving = self.session.pending_action in ("forward", "reverse")
+        started = moving or self.session.session_active
+        enabled = (
+            self.mode == "route"
+            and started
+            and self.session.pending_action != "disconnect"
+        )
         self.return_btn.setEnabled(enabled)
+        self.return_btn.setText("往終點" if self.session.pending_action == "reverse" else "往起點")
 
     def _log(self, msg):
         self.log_view.appendPlainText(msg)
