@@ -99,6 +99,9 @@ PikminBloom/
 **溝通契約**全部走 [map_bridge.py](gps_qt/map_bridge.py) 的 `MapBridge`：signal 是 Python → JS
 （JS 端 `bridge.xxx.connect()`），slot 一律命名為 `on_*` 是 JS → Python（slot 收到後轉成去掉
 `on_` 前綴的同名 Qt signal，讓 `MapPanel` 用一般的 `.connect()` 接）。新增任何互動時兩邊都要成對加。
+payload 一律由模組層級的純函式序列化（`route_payload()`／`bounds_payload()`／`favorites_payload()`），
+所以不開 Qt 也能單獨測試。`map.js` 的 `window.onerror` 會經由 `on_js_error` 回報到執行日誌——
+地圖是另一個執行環境，沒有這條線的話 JS 出錯在 Python 這邊完全看不到，只會看到地圖「沒有反應」。
 
 - **回授迴圈防護（最容易踩的坑）**：模型變動會回推整條路線給地圖，而地圖拖曳又會回寫模型。
   兩層擋住：(a) `MapPanel._schedule_route_push()` 用 `QTimer.singleShot(0)` 把同一輪事件迴圈的
@@ -106,6 +109,9 @@ PikminBloom/
   因此 **`route_payload()` 絕對不能加流水號、時間戳這類每次都會變的欄位**，加了 (b) 就失效。
   另外節點拖曳只在 `dragend` 通知 Python（`drag` 過程僅在本地更新折線），確保回推一定發生在
   拖曳結束後，不會把正在拖的 marker 重建掉。
+- **marker 一律用 `draggable: true` 建立，再視情況 `dragging.disable()`**：Leaflet 只有在建構時
+  `options.draggable` 為真才會建立 `marker.dragging` handler，用 `false` 建立的 marker 之後
+  再也無法啟用拖曳。編輯鎖切換只呼叫 `enable()`/`disable()`，不重建 marker。
 - **頁面是非同步載入的**：`MapPanel` 的每一項狀態都先存成成員變數，等頁面回報 `map_ready`
   才在 `_on_map_ready()` 一次推過去（順序有意義：先視野與圖磚，再畫內容，最後才套鎖定狀態——
   鎖定會把節點圖層整層拿掉，必須在節點已存在之後）。之後的變動才即時送出。
@@ -119,6 +125,8 @@ PikminBloom/
      `QWebEngineSettings.LocalContentCanAccessRemoteUrls`，否則圖磚全被擋掉而且**沒有任何錯誤訊息**。
 - **工具列刻意做在 Qt 這一側**而不是 HTML 裡，這樣搜尋框/下拉選單/核取方塊直接吃 qt-material
   的樣式，不必在 `map.css` 裡再複製一套跟著主題切換的控制項樣式。
+  面板內三列（工具列／路徑規劃列／地圖）的間距用 `ROW_SPACING`(8)，不是 Qt 預設的 6——
+  預設值會讓路徑規劃列的下緣框線幾乎貼著地圖，看起來像被地圖蓋掉（修過的 bug）。
 - **編輯鎖**：`_sync_btn_states()` 在 `pending_action` 為 `forward`/`reverse` 時送 `edit_locked(True)`。
   鎖定時 `map.js` 的 `setLocked()` 會把 `routeMarkerLayer`（節點專用的子圖層）從 `routeLayer` 移除，
   移動中地圖上只剩路徑線與軌跡；解鎖再把整層加回去，節點不需要重建。所以節點一律加到
@@ -134,7 +142,9 @@ PikminBloom/
   Leaflet 原生支援 `{s}`／`{r}`，不需要自己展開。**這些公用圖磚僅供輕量使用且必須保留 attribution。**
 - **地名搜尋刻意由 Python 端發送**（[geocode.py](gps_qt/geocode.py) 用 `QNetworkAccessManager`）：
   Nominatim 政策要求可識別的 User-Agent 且每秒最多 1 次，在 QWebEngine 裡 `fetch()` 帶的是瀏覽器
-  UA，改不掉也不合規。route 模式搜尋只帶視野過去，**不自動加點**。
+  UA，改不掉也不合規。route 模式搜尋只帶視野過去，**不自動加點**；結果超過一筆會跳 `QMenu` 讓使用者挑。
+  `Geocoder` 與 `Router`（路徑規劃）用的是同一個形狀：`MIN_REQUEST_INTERVAL_MS`(1000) 擋住過快的
+  請求，`_abort_pending()` 讓同時間只保留最後一次查詢，避免舊結果比新結果晚到而覆蓋掉畫面。
 - **Leaflet 本地化**在 `web/vendor/`：純靠 CDN 時斷網會整頁白，本地化後控制項仍在，
   只有圖磚空白並由 `tileerror` 顯示提示橫幅。
 
@@ -158,6 +168,11 @@ PikminBloom/
   「會攔截地圖點擊」的功能都要沿用這個「攔截成功才吃掉事件」的形狀。
 - 切到固定定位模式或模擬開始移動（編輯鎖）時都要呼叫 `route_planner.cancel()`，否則按鈕會卡在
   「請點選終點」卻永遠等不到點擊。
+- **點選過程要在地圖上看得見**：`pick_state_changed(picking, points_json)` 這條 bridge signal 讓
+  `map.js` 切換 `map-picking` 十字游標，並把已選的起點畫成「起」標記。選完起點後流程會停在原地等
+  終點，沒有這個回饋使用者無從判斷剛才那一下有沒有被收到。
+- 算完的路線由 `MainWindow._on_route_computed()` **整條取代**目前路線，同時 `fit_to()` 拉視野、
+  `clear_trail()` 清軌跡——路線都換了，舊軌跡沒有參考價值。`_load_favorite()` 載入最愛時同理。
 
 ### 非同步整合：qasync
 [main.py](gps_qt/main.py) 用 `qasync.QEventLoop` 包住 `QApplication` 並 `asyncio.set_event_loop(loop)`，讓 asyncio
@@ -256,8 +271,13 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
 - 刪除欄用自訂的 `DeleteButtonDelegate(QStyledItemDelegate)`：`paint()` 畫文字、`editorEvent()` 攔截點擊
   發出 `delete_requested(row)` signal。**刻意不用 `setIndexWidget()`**——那會替每一列建立一個真正的
   `QWidget` 並常駐，等於又要自己管理 widget 生命週期，違背用 `QTableView` 換掉手刻虛擬化的目的。
-- 刪除欄畫的是「刪除」二字（不用 icon/emoji），欄寬（`COL_DELETE`）要能容納文字，改文字時兩處要一起改。
-- `_delete_point()` 在只剩 2 個點時直接 return：路線至少要兩點才能內插，UI 層先擋掉。
+- 刪除欄畫的是「刪除」二字（不用 icon/emoji），`setColumnWidth(COL_DELETE, ...)` 給的欄寬要能容納
+  這兩個字，改文字時兩處要一起改。
+- `RoutePanel.delete_point()` 在只剩 2 個點時直接 return：路線至少要兩點才能內插，UI 層先擋掉。
+  表格的刪除欄與地圖節點彈出視窗的「刪除此點」都走這個方法，兩邊共用同一道下限檢查——新增其他
+  刪除入口時也要接到這裡，不要各自呼叫 `model.remove_point()`。
+- 標題列除了「新增點」還有「清空座標點」（`model.clear()`）：清空後路線只剩 0 個點，要重新在地圖上
+  點或載入最愛才能再開始模擬。
 - `_update_info()` 由 `RouteTableModel` 的 `on_changed` callback 觸發，每次表格變動就重算總距離、依目前
   速度估算的預計時間與節點數，顯示在「路線座標點」標題右邊。
 
@@ -282,6 +302,11 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
 - `refresh()` 同時做兩件事：依目前模式（pin/route）過濾清單內容，以及切換標題列按鈕的可見性——pin 模式
   只顯示「儲存目前座標」，route 模式只顯示「儲存目前路線」與「匯入 KML 路線」。切換模式時
   `MainWindow._switch_mode()` 會呼叫 `favorites_panel.refresh()`，兩者一起更新。
+- **地圖上的最愛圖層只畫地點最愛**：`favorites_payload()` 濾掉 route 型（一整條疊在編輯中路線上的
+  線分不出哪條是哪條，只是干擾），而且 `MainWindow._push_favorites_to_map()` 在 route 模式直接送空
+  清單把圖層清掉。payload 每一筆都帶 `index`——它在 `FavoritesPanel.favorites` 完整清單裡的原始位置，
+  使用者點地圖上的圓點時才能對回同一筆資料走既有的 `_load_favorite()` 流程（清單本身是過濾過的，
+  用過濾後的序號會對錯）。
 - 路線最愛除了手動輸入座標外，也可從 KML 檔案匯入（`_import_kml` → `persistence.parse_kml_route()`）：
   解析第一條 `LineString` 作為路線座標，並用起訖點附近（約 50 公尺內）的 `Point` 名稱自動當作起訖點
   備註，其餘中間點備註留空。
@@ -297,6 +322,9 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
 - `_try_apply_pasted_coordinates()` 回傳 bool：字串不是「兩個以逗號分隔且都在合法經緯度範圍內的數字」
   就回 False，由呼叫端 fallback 回原本的貼上行為。新增類似的輸入攔截時要沿用這個「攔截成功才吃掉事件」
   的形狀，不要無條件吞掉貼上。
+- `PinPanel` 的版面最後一定要留一個 `layout.addStretch(1)`（修過的 bug）：少了它，`QVBoxLayout` 會把
+  面板多出來的垂直空間平均分給每一列（包含兩個標題 `QLabel`），文字被撐在過高的空白區塊正中央，
+  看起來像「標題列高度太大」。加上之後多餘空間全被吸收，其餘內容維持貼齊頂端的自然高度。
 
 ### 響應式版面
 `MainWindow.resizeEvent()`（[main_window.py](gps_qt/widgets/main_window.py)）依視窗寬度是否超過 `WIDE_LAYOUT_BREAKPOINT`
