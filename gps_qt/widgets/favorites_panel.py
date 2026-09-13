@@ -134,7 +134,10 @@ class FavoritesPanel(QFrame):
         return row
 
     def _save(self):
-        persistence.save_favorites(self.favorites)
+        error = persistence.save_favorites(self.favorites)
+        if error:
+            # 存最愛是使用者主動按下去的動作，失敗要當場講，不能只寫進日誌。
+            QMessageBox.warning(self, "儲存失敗", error)
         self.refresh()
 
     def _save_pin(self):

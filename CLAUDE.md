@@ -11,7 +11,13 @@ PinDrift 是一個 Python 桌面工具，透過 `pymobiledevice3` 模擬 iPhone�
 座標可以直接在內嵌的 Leaflet 地圖上點選、拖曳、刪除（[gps_qt/web/](gps_qt/web)），
 移動中還會即時畫出目前位置與已走軌跡。
 
-狀態存在專案根目錄下的兩個 JSON 檔（皆已列入 `.gitignore`）：
+狀態存在兩個 JSON 檔（皆已列入 `.gitignore`），位置由 [paths.py](gps_qt/paths.py) 的
+`data_file()` 決定：一律放在執行檔所在的資料夾（直接跑原始碼時是專案根目錄），
+整包搬走設定就跟著走。`save_settings()`／`save_favorites()` 共用的 `_write_json()`
+**只攔 `OSError` 並回傳錯誤訊息字串（成功回傳 `None`）**，不丟例外——放在唯讀位置時
+存檔失敗不能讓 `closeEvent()` 整個炸掉；序列化失敗則照常拋 `TypeError`，那是程式的 bug。
+三個呼叫端各自決定提示方式：切換主題走執行日誌、存最愛與關閉視窗走 `QMessageBox`
+（視窗都要關了，寫進日誌等於沒說）。新增存檔入口時要記得接這個回傳值：
 - `pindrift_favorites.json`：最愛地點／路線（`{"type": "pin"|"route", "name", ...}` 陣列）。
 - `pindrift_settings.json`：`theme`（主題偏好）、`window`（視窗幾何 + `maximized`）、
   `last_route`（上次的路線座標點）、`speed_kmh`（上次的移動速度）、
@@ -33,31 +39,40 @@ python -m pymobiledevice3 remote tunneld
 # 執行測試（只涵蓋純邏輯：geo、map_bridge payload、geocode 解析、routing polyline、設定正規化）
 pip install -r requirements-dev.txt
 python -m pytest
+
+# 打包成可直接交付的資料夾（產出 dist/PinDrift/，約 510 MB）
+pip install -r requirements-build.txt
+python -m PyInstaller --noconfirm --clean PinDrift.spec
 ```
 
-一般情況下不需要手動跑 tunneld：雙擊 [run.bat](run.bat) 會先呼叫
-[start_tunneld.ps1](start_tunneld.ps1) 偵測 `127.0.0.1:49151` 是否已經有人在聽，沒有的話用
-`Start-Process -Verb RunAs` 以系統管理員身分啟動 tunneld（會跳 UAC），等幾秒後再用 `pythonw`
-啟動 App（不顯示主控台視窗，cmd 視窗隨即關閉）。`start_tunneld.ps1` 用離開碼傳遞狀態：
-`0` = tunneld 已在執行、`1` = 剛啟動（run.bat 據此決定要不要等待）。
+一般情況下不需要手動跑 tunneld：App 啟動後 [MainWindow._ensure_tunneld()](gps_qt/widgets/main_window.py)
+會呼叫 [tunneld.py](gps_qt/tunneld.py) 偵測 `127.0.0.1:49151` 是否已經有人在聽，沒有的話用
+`ShellExecuteW` 的 `runas` 動詞以系統管理員身分啟動（會跳 UAC），結果寫進執行日誌。
+[run.bat](run.bat) 因此只剩「用 `pythonw` 開 App」一件事。
 
 測試只涵蓋不需要 Qt 事件迴圈的純函式（[tests/](tests)），Widget 與地圖頁面沒有自動化測試；
-專案沒有 lint 或 build 設定，也沒有 CI。
+專案沒有 lint 設定，也沒有 CI。
 
 ## 架構重點
 
 ### 檔案地圖
 ```
 PinDrift/
-├── run.bat              # 啟動捷徑：先確保 tunneld 在跑，再用 pythonw 開 App
-├── start_tunneld.ps1    # 偵測 49151 埠，必要時以系統管理員啟動 tunneld
-├── requirements.txt     # 執行 App 需要的相依套件
-├── requirements-dev.txt # 測試相依（pytest）
-├── .gitattributes       # vendored 的 Leaflet 檔案排除行尾轉換（見下方地圖面板）
-├── conftest.py          # 讓 pytest 把根目錄加進 sys.path
-├── tests/               # 純函式測試（不需要 Qt 事件迴圈）
+├── run.bat                # 啟動捷徑：用 pythonw 開 App（tunneld 交給 tunneld.py）
+├── build.bat              # 打包捷徑：裝相依 + 跑 PyInstaller
+├── PinDrift.spec          # PyInstaller 設定（onedir，兩個執行檔共用 _internal）
+├── app_entry.py           # 打包用的主程式進入點（PyInstaller 只吃腳本不吃模組）
+├── tunneld_entry.py       # 打包用的 tunneld 進入點（console 模式的第二個執行檔）
+├── requirements.txt       # 執行 App 需要的相依套件
+├── requirements-dev.txt   # 測試相依（pytest）
+├── requirements-build.txt # 打包相依（pyinstaller）
+├── .gitattributes         # vendored 的 Leaflet 檔案排除行尾轉換（見下方地圖面板）
+├── conftest.py            # 讓 pytest 把根目錄加進 sys.path
+├── tests/                 # 純函式測試（不需要 Qt 事件迴圈）
 └── gps_qt/
     ├── main.py              # 進入點：QApplication + qasync 事件迴圈
+    ├── paths.py             # 資源／使用者資料的路徑解析（打包後兩者要分開）
+    ├── tunneld.py           # tunneld 偵測 + 提權啟動；也是 tunneld 子行程的本體
     ├── theme.py             # qt-material 主題套用、字級覆寫、danger/success 語意色
     ├── geo.py               # haversine()、interpolate_points()、douglas_peucker()
     ├── persistence.py       # JSON 存讀 + KML 解析 + 地圖設定正規化
@@ -80,8 +95,8 @@ PinDrift/
 ```
 
 ### 執行流程（連接 iPhone 的關鍵鏈路，長連線架構）
-1. `tunneld` 必須以系統管理員權限先啟動（`run.bat` 會自動處理，或手動跑
-   `python -m pymobiledevice3 remote tunneld`），建立 iOS 26 的 RemoteXPC 通道。
+1. `tunneld` 必須以系統管理員權限先啟動（App 開起來時 `_ensure_tunneld()` 會自動處理，
+   或手動跑 `python -m pymobiledevice3 remote tunneld`），建立 iOS 26 的 RemoteXPC 通道。
 2. 按「開始模擬」時，[session.py](gps_qt/session.py) 的 `GPSSession._session_main()` 用 `asyncio.ensure_future()` 建立一個常駐 task，`async with DvtProvider(rsd) as dvt, LocationSimulation(dvt) as sim:` 開一次連線後就常駐在 while 迴圈裡；後續按「停止」「往起點／往終點」都**不會**重建 task 或重新連線，只是改變 `self.pending_action` 這個共享狀態（`"forward" | "reverse" | "pause" | "disconnect"`），由 while 迴圈讀取並分派動作。
 3. 直到 `pending_action == "disconnect"`（使用者按「恢復真實定位」）才 `break` 出迴圈、呼叫 `sim.clear()` 並讓 `async with` 關閉連線——恢復真實 GPS 只會在明確斷線時發生，單純停止／切換方向都仍保持模擬連線在目前座標。
 4. 座標注入本身是 `sim.set(lat, lon)`，呼叫位置在 `_walk_route()` / `_walk_pin()` 這兩個由 `_session_main()` 依 `pending_action` 呼叫的協程裡。
@@ -345,3 +360,40 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
 的下限。座標面板要不要顯示由 `_sync_coord_panels()` 一處判斷——「目前模式」與「是否收合」是兩個
 獨立條件，分散到 `_switch_mode()` 與收合按鈕各自 `show()`/`hide()` 的話，收合狀態下切換模式會把
 面板又叫回來。
+
+### 打包成執行檔：PyInstaller onedir
+[PinDrift.spec](PinDrift.spec) 產出 `dist/PinDrift/` 這一個可以整包搬走的資料夾（約 510 MB），
+裡面有兩個共用同一份 `_internal` 的執行檔：`PinDrift.exe`（視窗模式、一般權限）與
+`PinDrift-tunneld.exe`（主控台模式、由前者提權啟動）。
+
+- **刻意用 onedir 而不是 onefile**：QtWebEngine 的 `QtWebEngineProcess.exe` 是獨立子行程，
+  還要找得到 ICU 資料與 locales，onefile 每次啟動都解壓到暫存目錄，既慢又常出現子行程
+  找不到資源的問題。
+- **tunneld 要拆成第二個執行檔**：使用者的機器上沒有 Python，原本
+  `Start-Process python -m pymobiledevice3 ... -Verb RunAs` 這條路整條斷掉。拆成兩個 exe 才能
+  讓主程式維持視窗模式，而 tunneld 保有主控台（看得到它在跑、也看得到錯誤）。兩者的
+  `Analysis` 分開但共用一個 `COLLECT`，相依套件不會打包兩份。
+- **`paths.py` 是打包能不能動的關鍵**：隨附資源（`web/`）在 `sys._MEIPASS`（即 `_internal/`）
+  底下，使用者資料（最愛、設定）則在 exe 自己的資料夾——兩者在 onedir 下是不同路徑，
+  用同一套 `__file__` 相對算法會錯。未凍結時兩者都回到專案根目錄，所以開發時的行為與
+  打包前完全相同。**設定放在 exe 旁邊是使用者明確要求**（整包搬走設定跟著走），代價是
+  裝進 `Program Files` 這類唯讀位置時存不了設定。
+- **三個實測踩到的坑**（改 `EXCLUDED_MODULES` 前務必先讀）：
+  1. `PySide6.QtUiTools` **不能排除**——`qt_material/__init__.py` 直接 import 它，排掉會在
+     `import qt_material` 當場 `ModuleNotFoundError`。同理 `QtQml`／`QtQuick`／`QtPositioning`／
+     `QtOpenGL` 是 QtWebEngine 的相依，排掉地圖會壞。
+  2. `prompt_toolkit` **不能排除**——`pymobiledevice3/cli/cli_common.py` 匯入的 `questionary`
+     依賴它，排掉 tunneld 一啟動就 `ModuleNotFoundError`。`pygments` 同理（`remotexpc.py` 與
+     `service_connection.py` 會用到）。可以排的是螢幕錄影／截圖／互動式 shell 那條路上的
+     `av`／`numpy`／`PIL`／`IPython`／`jedi`（合計約 125 MB），因為 pymobiledevice3 的 CLI 子命令
+     是用 `importlib` 依名稱延遲載入的，我們只會走到 `remote tunneld` 與 DVT。
+  3. `wintun.dll` 在 **另一個發行套件** `pytun_pmd3` 裡，`collect_all("pymobiledevice3")` 不會
+     一起帶走，少了它 tunneld 一啟動就 `FileNotFoundError`。所以 spec 裡另外
+     `collect_all("pytun_pmd3")`。
+- **視窗模式的 exe 當掉時看不到 traceback**，只會跳一個 PyInstaller 的錯誤對話框，而且那個
+  對話框會讓行程一直活著——用「行程還在」判斷啟動成功會得到假的綠燈。驗證時要改用
+  `subprocess.PIPE` 收 stdout，並確認 `QtWebEngineProcess.exe` 這個子行程真的起來了
+  （它起來才代表地圖頁面載入成功）。
+- **翻譯與除錯資源佔掉 130 MB**，spec 用 `_is_unused_qt_data()` 濾掉 `*.debug.pak`、
+  53 種 WebEngine 語系與 157 個 Qt `.qm` 裡用不到的那些。要多支援一種語系就改
+  `KEEP_WEBENGINE_LOCALES` 與 `KEEP_QT_TRANSLATION_SUFFIXES`。

@@ -4,10 +4,12 @@ import json
 import os
 import xml.etree.ElementTree as ET
 
-FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pindrift_favorites.json")
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pindrift_settings.json")
-FAVORITES_FILE = os.path.normpath(FAVORITES_FILE)
-SETTINGS_FILE = os.path.normpath(SETTINGS_FILE)
+from . import paths
+
+# 存放位置由 paths.data_file() 決定：一律放在執行檔（未凍結時是專案根目錄）
+# 所在的資料夾，整包搬走設定就跟著走。
+FAVORITES_FILE = paths.data_file("pindrift_favorites.json")
+SETTINGS_FILE = paths.data_file("pindrift_settings.json")
 
 
 def load_favorites():
@@ -21,8 +23,8 @@ def load_favorites():
 
 
 def save_favorites(favs):
-    with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
-        json.dump(favs, f, ensure_ascii=False, indent=2)
+    """寫入最愛；成功回傳 None，失敗回傳錯誤訊息（見 _write_json）。"""
+    return _write_json(FAVORITES_FILE, favs)
 
 
 def load_settings():
@@ -36,8 +38,23 @@ def load_settings():
 
 
 def save_settings(settings):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
+    """寫入設定；成功回傳 None，失敗回傳錯誤訊息（見 _write_json）。"""
+    return _write_json(SETTINGS_FILE, settings)
+
+
+def _write_json(path, payload):
+    """把 payload 寫成 JSON。
+
+    寫不進去（唯讀資料夾、權限不足、磁碟滿了）時回傳錯誤訊息而不是丟例外：
+    存檔失敗不該讓關閉視窗的流程整個炸掉，由呼叫端決定要用執行日誌還是對話框提示。
+    只攔 OSError——序列化本身失敗是程式的 bug，要讓它照常拋出來。
+    """
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        return f"無法寫入 {path}：{exc}"
+    return None
 
 
 def load_saved_route(settings):

@@ -3,14 +3,14 @@
 這裡只放 UI 骨架，連線狀態機在 gps_qt/session.py 的 GPSSession。
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
     QSplitter, QVBoxLayout, QWidget,
 )
 
-from .. import persistence, theme, window_geometry
+from .. import persistence, theme, tunneld, window_geometry
 from ..session import GPSSession
 from .favorites_panel import FavoritesPanel
 from .map_panel import MapPanel
@@ -82,6 +82,10 @@ class MainWindow(QMainWindow):
             self.showMaximized()
         else:
             self.showNormal()
+
+        # 延到下一輪事件迴圈才檢查 tunneld：提權用的 UAC 對話框會卡住這條執行緒，
+        # 先讓視窗畫出來，使用者才看得到自己是在對哪個程式授權。
+        QTimer.singleShot(0, self._ensure_tunneld)
 
     # ── UI 組裝 ────────────────────
     def _build_ui(self, route):
@@ -203,7 +207,9 @@ class MainWindow(QMainWindow):
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
         self._apply_theme()
         self.settings["theme"] = self.theme_name
-        persistence.save_settings(self.settings)
+        error = persistence.save_settings(self.settings)
+        if error:
+            self._log(error)
 
     # ── 模式切換 ────────────────────
     def _switch_mode(self, mode):
@@ -413,6 +419,11 @@ class MainWindow(QMainWindow):
         self.return_btn.setEnabled(enabled)
         self.return_btn.setText("往終點" if self.session.pending_action == "reverse" else "往起點")
 
+    def _ensure_tunneld(self):
+        """tunneld 沒在跑就提權啟動它；結果寫進執行日誌。"""
+        for message in tunneld.ensure_running():
+            self._log(message)
+
     def _log(self, msg):
         self.log_view.appendPlainText(msg)
 
@@ -439,5 +450,8 @@ class MainWindow(QMainWindow):
         self.settings["window"] = win
         self.settings["last_route"] = [[r[0], r[1], r[2]] for r in self.route_panel.route]
         self.settings["speed_kmh"] = self.route_panel.speed_spin.value()
-        persistence.save_settings(self.settings)
+        error = persistence.save_settings(self.settings)
+        if error:
+            # 視窗都要關了，寫進執行日誌等於沒說；但也不攔下關閉動作。
+            QMessageBox.warning(self, "設定儲存失敗", error)
         super().closeEvent(event)

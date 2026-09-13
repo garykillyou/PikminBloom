@@ -28,7 +28,8 @@
 - 📊 **即時進度** — 顯示目前座標、完成百分比，以及路線總距離與預計時間
 - 💾 **記住上次設定** — 自動保留上次的路線座標點與移動速度
 - 🌓 **深色 / 淺色主題** — 一鍵切換，偏好會自動記住
-- 🚀 **一鍵啟動** — `run.bat` 會自動偵測並啟動 tunneld，不必自己開系統管理員終端機
+- 🚀 **一鍵啟動** — App 會自動偵測並啟動 tunneld，不必自己開系統管理員終端機
+- 📦 **免安裝版** — 可打包成一個資料夾，目標機器不需要裝 Python
 
 ---
 
@@ -44,6 +45,23 @@
 ---
 
 ## 🚀 安裝步驟
+
+有兩種方式：直接用打包好的資料夾（使用者），或從原始碼執行（開發者）。
+
+### 方式 A：免安裝版（不需要 Python）
+
+把 `PinDrift` 資料夾整個複製到任何位置，雙擊裡面的 **`PinDrift.exe`** 即可。
+資料夾內容缺一不可（`_internal` 放的是程式本體與 Qt/Chromium 執行環境），請整包一起搬。
+
+設定與最愛（`pindrift_settings.json`／`pindrift_favorites.json`）就存在 `PinDrift.exe`
+旁邊，整個資料夾複製到隨身碟或另一台機器，設定也會跟著走。
+
+> 因為要寫入自己的資料夾，請把程式放在使用者有寫入權限的位置（桌面、文件夾、隨身碟都可以）。
+> 放進 `C:\Program Files\` 會因為權限不足而存不了設定。
+
+> 打包方式見下方 [📦 打包成免安裝版](#-打包成免安裝版)。
+
+### 方式 B：從原始碼執行
 
 **1. 安裝 Python 3.14 64-bit**
 
@@ -70,18 +88,17 @@ pip install -r requirements.txt
 
 設定 → 隱私與安全性 → 開發者模式 → 開啟（需重開機）
 
-### Step 2：雙擊 `run.bat` 啟動
+### Step 2：啟動 App
 
-`run.bat` 會自動做兩件事：
+免安裝版雙擊 `PinDrift.exe`；從原始碼執行則雙擊 `run.bat`。
 
-1. 偵測 tunneld 是否已經在執行（檢查 `127.0.0.1:49151`）。沒有的話會跳出 **UAC 視窗**要求系統管理員權限，
-   同意後自動啟動 tunneld，並等待幾秒讓它就緒。
-2. 以 `pythonw` 啟動 App（不顯示主控台視窗，cmd 視窗會自動關閉，只留下程式視窗）。
+App 一開起來就會偵測 tunneld 是否已經在執行（檢查 `127.0.0.1:49151`）。沒有的話會跳出
+**UAC 視窗**要求系統管理員權限，同意後自動啟動 tunneld，過程會寫在 App 的執行日誌裡。
 
-> tunneld 的視窗請保持開著，關掉就會斷線。
+> tunneld 的視窗請保持開著，關掉就會斷線。啟動後等幾秒再按「開始模擬」。
 
 <details>
-<summary>手動啟動（不使用 run.bat）</summary>
+<summary>手動啟動 tunneld（從原始碼執行時）</summary>
 
 以**系統管理員**開啟命令提示字元：
 
@@ -179,12 +196,44 @@ PinDrift/
 ├── conftest.py             # 讓 pytest 找得到 gps_qt 套件
 ├── requirements.txt        # 相依套件
 ├── requirements-dev.txt    # 測試相依（執行 App 本身不需要）
-├── run.bat                 # 啟動捷徑（自動起 tunneld + 免主控台視窗啟動）
-├── start_tunneld.ps1       # 偵測並以系統管理員啟動 tunneld
+├── requirements-build.txt  # 打包相依（PyInstaller，執行 App 本身不需要）
+├── run.bat                 # 啟動捷徑（免主控台視窗啟動）
+├── build.bat               # 打包捷徑（產生 dist/PinDrift/）
+├── PinDrift.spec           # PyInstaller 設定
+├── app_entry.py            # 打包用的主程式進入點
+├── tunneld_entry.py        # 打包用的 tunneld 進入點
 ├── pindrift_favorites.json # 最愛地點資料（自動產生）
 ├── pindrift_settings.json  # 主題、視窗位置、上次路線與速度、地圖設定（自動產生）
 └── README.md
 ```
+
+打包後的 `dist/PinDrift/` 長這樣：
+
+```
+PinDrift/
+├── PinDrift.exe            # 主程式（雙擊這個）
+├── PinDrift-tunneld.exe    # tunneld，由主程式提權啟動，不用自己點
+├── _internal/              # 程式本體與 Qt/Chromium 執行環境（不要刪、不要搬）
+├── pindrift_settings.json  # 設定（第一次關閉程式時自動產生）
+└── pindrift_favorites.json # 最愛（存了第一筆之後才會出現）
+```
+
+---
+
+## 📦 打包成免安裝版
+
+在已經可以從原始碼執行的環境下，雙擊 `build.bat`（或執行下面的指令），會在 `dist\PinDrift\`
+產生一個可以整包交付的資料夾，目標機器不需要安裝 Python：
+
+```bash
+pip install -r requirements-build.txt
+python -m PyInstaller --noconfirm --clean PinDrift.spec
+```
+
+- 成品約 **510 MB**，主要是 QtWebEngine（內嵌的 Chromium）本身的體積，這是內嵌地圖的固定成本。
+- 刻意用**資料夾**而不是單一 exe：QtWebEngine 會另外開子行程，單檔模式每次啟動都要解壓縮，
+  又慢又容易出問題。
+- 要縮成一個檔案交付的話，把資料夾用 7-Zip 之類的工具壓成自解壓縮檔，或用 Inno Setup 做成安裝檔。
 
 ---
 

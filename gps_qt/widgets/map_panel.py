@@ -9,8 +9,6 @@
 （_on_map_ready），之後的變動才即時送出。
 """
 
-import os
-
 from PySide6.QtCore import QFile, QIODevice, QTimer, QUrl, Signal
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineScript, QWebEngineSettings
@@ -20,14 +18,12 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QVBoxLayout,
 )
 
-from .. import theme
+from .. import paths, theme
 from ..geocode import Geocoder
 from ..map_bridge import MapBridge, bounds_payload, favorites_payload, route_payload
 from .route_planner import RoutePlanner
 
-MAP_HTML = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web", "map.html")
-)
+MAP_HTML = paths.resource_path("web", "map.html")
 
 MAP_MIN_HEIGHT = 320
 # 工具列、路徑規劃列與地圖之間的間隔。Qt 預設的 6px 讓路徑規劃列的下緣框線
