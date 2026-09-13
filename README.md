@@ -79,7 +79,7 @@ INFO: Uvicorn running on http://127.0.0.1:49151
 開新的命令提示字元：
 
 ```bash
-python gps_app.py
+python -m gps_qt.main
 ```
 
 也可以直接雙擊 `run.bat`，會以不顯示主控台視窗的方式啟動。
@@ -123,7 +123,7 @@ python gps_app.py
 
 ```
 PikminBloom/
-├── gps_app.py          # 主程式（GUI App）
+├── gps_qt/             # 主程式（GUI App，PySide6 + qasync + qt-material）
 ├── requirements.txt    # 相依套件
 ├── run.bat             # 免主控台視窗啟動捷徑
 ├── gps_favorites.json  # 最愛地點資料（自動產生）

@@ -1,3 +1,4 @@
 @echo off
-start "" pythonw "%~dp0gps_app.py"
+cd /d "%~dp0"
+start "" pythonw -m gps_qt.main
 exit
