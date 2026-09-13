@@ -107,7 +107,7 @@ class FavoritesPanel(QFrame):
             item = QListWidgetItem()
             self.list_widget.addItem(item)
             row_widget = self._build_row(i, fav)
-            item.setSizeHint(row_widget.sizeHint())
+            theme.fit_list_item(item, row_widget)
             self.list_widget.setItemWidget(item, row_widget)
 
     def _build_row(self, i, fav):

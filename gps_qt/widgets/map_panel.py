@@ -30,6 +30,9 @@ MAP_HTML = os.path.normpath(
 )
 
 MAP_MIN_HEIGHT = 320
+# 工具列、路徑規劃列與地圖之間的間隔。Qt 預設的 6px 讓路徑規劃列的下緣框線
+# 幾乎貼著地圖，兩者之間需要看得出來的呼吸空間。
+ROW_SPACING = 8
 SEARCH_BOX_MIN_WIDTH = 180
 MENU_ITEM_MAX_CHARS = 70
 
@@ -97,6 +100,7 @@ class MapPanel(QFrame):
         self._route_push_pending = False
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(ROW_SPACING)
         layout.addLayout(self._build_toolbar())
 
         # 路徑規劃只在路線模式有意義，所以獨立成第二列、切到固定定位時整列隱藏；

@@ -31,6 +31,7 @@ var state = {
 };
 
 var routeLayer = null;
+var routeMarkerLayer = null;
 var routeMarkers = [];
 var routeLine = null;
 var pinLayer = null;
@@ -45,9 +46,7 @@ var pickLayer = null;
 
 function routeIcon(index, total) {
   var cls = "route-pin";
-  if (state.locked) {
-    cls += " route-pin-locked";
-  } else if (index === 0) {
+  if (index === 0) {
     cls += " route-pin-start";
   } else if (index === total - 1) {
     cls += " route-pin-end";
@@ -84,7 +83,9 @@ function initMap() {
   map = L.map("map", { zoomControl: true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 
   routeLine = L.polyline([], { className: "route-line" });
-  routeLayer = L.layerGroup([routeLine]).addTo(map);
+  // 節點另外放一層：移動中只要把這層從 routeLayer 拿掉，路徑線就會單獨留著。
+  routeMarkerLayer = L.layerGroup();
+  routeLayer = L.layerGroup([routeLine, routeMarkerLayer]).addTo(map);
   pinLayer = L.layerGroup();
   favoriteLayer = L.layerGroup().addTo(map);
   pickLayer = L.layerGroup().addTo(map);
@@ -180,7 +181,7 @@ function renderRoute(json) {
 
 function syncRouteMarkers(points) {
   while (routeMarkers.length > points.length) {
-    routeLayer.removeLayer(routeMarkers.pop());
+    routeMarkerLayer.removeLayer(routeMarkers.pop());
   }
   for (var i = 0; i < points.length; i++) {
     var latlng = [points[i][0], points[i][1]];
@@ -190,7 +191,7 @@ function syncRouteMarkers(points) {
       // options.draggable 為真才會建立 marker.dragging handler，用 false 建立
       // 之後就再也無法啟用拖曳。
       marker = L.marker(latlng, { icon: routeIcon(i, points.length), draggable: true });
-      marker.addTo(routeLayer);
+      marker.addTo(routeMarkerLayer);
       bindRouteMarker(marker);
       routeMarkers[i] = marker;
     } else {
@@ -256,12 +257,11 @@ function setLocked(locked) {
   if (pinMarker) {
     setDraggable(pinMarker, !locked);
   }
-  // 鎖定狀態會改變節點配色（起訖點的綠/藍在鎖定時統一成灰褐），重畫一次圖示。
-  var total = routeMarkers.length;
-  routeMarkers.forEach(function (marker, i) {
+  // 移動中把整層節點藏起來，只留下路徑線；解鎖後原本的節點會直接回來。
+  routeMarkers.forEach(function (marker) {
     setDraggable(marker, !locked);
-    marker.setIcon(routeIcon(i, total));
   });
+  toggleSubLayer(routeLayer, routeMarkerLayer, !locked);
   map.closePopup();
   updateBanner();
 }
@@ -401,6 +401,14 @@ function setDraggable(marker, enabled) {
     marker.dragging.enable();
   } else {
     marker.dragging.disable();
+  }
+}
+
+function toggleSubLayer(parent, layer, visible) {
+  if (visible && !parent.hasLayer(layer)) {
+    parent.addLayer(layer);
+  } else if (!visible && parent.hasLayer(layer)) {
+    parent.removeLayer(layer);
   }
 }
 

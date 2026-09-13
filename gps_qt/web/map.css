@@ -51,10 +51,6 @@ html, body {
   text-align: center;
 }
 
-.route-pin-locked {
-  background: #8d6e63;
-}
-
 /* 起點與終點另外標色，方向一眼可辨 */
 .route-pin-start {
   background: #43a047;

@@ -108,7 +108,7 @@ PikminBloom/
   拖曳結束後，不會把正在拖的 marker 重建掉。
 - **頁面是非同步載入的**：`MapPanel` 的每一項狀態都先存成成員變數，等頁面回報 `map_ready`
   才在 `_on_map_ready()` 一次推過去（順序有意義：先視野與圖磚，再畫內容，最後才套鎖定狀態——
-  鎖定會重畫所有節點圖示，必須在節點已存在之後）。之後的變動才即時送出。
+  鎖定會把節點圖層整層拿掉，必須在節點已存在之後）。之後的變動才即時送出。
 - **三個查證過的載入陷阱**：
   1. `main.py` 必須在建立 `QApplication` **之前** `import PySide6.QtWebEngineWidgets`，Qt 6 要在
      那時候設好 `AA_ShareOpenGLContexts`，順序反了會直接中止。那行 import 看起來沒用到但不能刪。
@@ -120,6 +120,9 @@ PikminBloom/
 - **工具列刻意做在 Qt 這一側**而不是 HTML 裡，這樣搜尋框/下拉選單/核取方塊直接吃 qt-material
   的樣式，不必在 `map.css` 裡再複製一套跟著主題切換的控制項樣式。
 - **編輯鎖**：`_sync_btn_states()` 在 `pending_action` 為 `forward`/`reverse` 時送 `edit_locked(True)`。
+  鎖定時 `map.js` 的 `setLocked()` 會把 `routeMarkerLayer`（節點專用的子圖層）從 `routeLayer` 移除，
+  移動中地圖上只剩路徑線與軌跡；解鎖再把整層加回去，節點不需要重建。所以節點一律加到
+  `routeMarkerLayer` 而不是 `routeLayer`，否則路徑線會跟著一起被藏掉。
   固定定位「保持中」（`_walk_pin()` 注入完已把 `pending_action` 設回 `pause`）**不算移動中**，
   此時在地圖上點新座標會由 `_reinject_pin_if_holding()` 立刻重新注入一次，人就直接搬過去。
 - **軌跡**：`session.position_changed` 每次 `sim.set()` 後 emit，`map.js` 用 `polyline.addLatLng()`
@@ -195,6 +198,34 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
   對應 qt-material 內建的 `QPushButton.danger`／`.success` 規則（靠 Qt 動態屬性 `class` 選取，這點已用
   offscreen 平台實際渲染截圖驗證過，不是靠猜的）。`mark_class()` 呼叫完一定要 `unpolish()`/`polish()`
   才會重新計算樣式。
+- **控制項的外框與高度是覆寫過的**：qt-material 的樣式表雖然各類都寫 `height: 28px`，
+  但那是**內容區**高度，各 widget 的 padding 與邊框不同，實測 `sizeHint()` 分別是
+  `QPushButton` 40／`QComboBox` 32／`QLineEdit` 30／`QDoubleSpinBox` 33 px，並排在同一排
+  工具列時高低不一；而且輸入類 widget 被當成 Material 的「填色輸入框」（只有底線
+  `border-width: 0 0 2px 0`、只有上緣圓角），與按鈕的「四邊 2px 框線 + 4px 圓角」也不同調。
+  `theme.py` 的 `CONTROL_QSS_TEMPLATE` + `_control_qss()` 把按鈕／下拉選單／單行輸入／數值
+  輸入統一成同一組外框與同一個高度（`CONTROL_HEIGHT`，內容區高度；實際外觀高 = 該值 + 邊框 4px），
+  展開後的清單（`QComboBox QAbstractItemView`）與 `QMenu` 也跟著對齊。要調整高度只改
+  `CONTROL_HEIGHT` 一處，不要回頭去改個別 widget 的 `setFixedHeight()`。
+  - **`CONTROL_HEIGHT` 不能小於 widget 實際需要的高度**（這是修過的 bug）：QSS 的 `max-height`
+    會變成 widget 的 `maximumHeight`（= 該值 + 邊框 4px），設得太小時版面配置會把控制項往下
+    推幾個 px、**下緣框線被父 widget 裁掉**（看起來像被下面的元件蓋住），文字也跟著偏上，
+    看起來沒有垂直置中——兩個症狀同一個原因。設成 24 時實測 `RoutePlanner` 的按鈕被排到
+    `y=2`、幾何高度 32 卻超出父層 32；28 才會讓 `sizeHint`／`maximumHeight`／實際幾何三者
+    都是 32。改這個常數後要確認 `sizeHint().height() == maximumHeight()`。
+  - **形狀統一但顏色分層**：強調色只留給可按的 `QPushButton`，輸入類平時是中性框線
+    （`secondaryLightColor`），`:hover`/`:focus` 才轉成 `primaryColor`，焦點位置才看得出來。
+    `:hover`/`:focus` 與 `:disabled` 選擇器權重相同，靠後面的規則勝出，所以 **`:disabled`
+    一定要寫在 `:hover`/`:focus` 之後**。
+  - 色票跟 `qt_material.get_theme()` 要（`invert_secondary` 必須和 `apply()` 傳的值一致），
+    **不要在 QSS 裡寫死色碼**，否則切換主題會脫鉤；停用狀態用 `_rgba()` 把同一個顏色加上
+    透明度變淡，而不是另外挑一個色。
+  - **「別人內部的編輯器」要例外**：`QTableView` 儲存格的編輯器、`QDoubleSpinBox` 內部的
+    輸入框（`pin_panel` 還會用 `setLineEdit()` 換成自訂子類別）都是 `QLineEdit`，會被上面的
+    規則命中。表格編輯器鎖死高度會撐破所在的列；spin box 內部的那個會多畫一層框線、多縮排
+    一次 `padding-left`，數值也會被往下擠。所以 `QTableView QLineEdit` 與
+    `QAbstractSpinBox QLineEdit` 都要把這些屬性放回預設。新增任何 `QLineEdit` 通用規則時，
+    都要想一下有沒有第三個「內部編輯器」也會被掃到。
 - **下拉選單會截字的陷阱**：qt-material 的 `QComboBox::drop-down { width: 20px }` 與
   `QComboBox::down-arrow { margin-right: 8px }` 畫在文字區右側，但 `QComboBox` 只有
   `padding-left`、沒有對應的右側 padding，`sizeHint()` 也沒把這塊完整計入；再加上
@@ -238,6 +269,11 @@ Qt signal（`log`/`progress_value`/`progress_label`/`paused`/`session_ended`/`di
   `Ignored`，QLabel 的預設 `minimumSizeHint` 等於文字寬度，名稱一長就會把整列往右撐出可視範圍，必須
   橫向捲動才看得到後面的載入/編輯/刪除欄位；改用 `Ignored` + 動態截斷後，這幾個欄位永遠留在可視範圍
   內。
+- **列的高度要用 `theme.fit_list_item()` 設，不要直接把 `row_widget.sizeHint()` 塞給
+  `QListWidgetItem.setSizeHint()`**（修過的 bug）：qt-material 有一條
+  `QListView::item { padding: 4px }`，`setItemWidget()` 掛上去的列 widget 會被上下各內縮 4px，
+  實際拿到的高度比 item 的 sizeHint 少 8px（實測需要 36px 只拿到 28px），列裡按鈕的下緣框線
+  就被裁掉。`fit_list_item()` 會補上 `LIST_ITEM_PADDING * 2`；那個常數直接對應上面那條 QSS 規則。
 - 這幾個固定欄位（座標預覽、載入、編輯、刪除）的寬度用 `_fix_to_hint()` 依 widget 自己的 `sizeHint()`
   動態算出來，**不要**寫死像素常數：按鈕實際所需寬度取決於當下套用的 QSS padding，寫死的數字換主題或
   調字級後很容易太窄而裁切文字（也是修過的 bug）。呼叫時機必須在 `theme.apply()` 套用樣式表「之後」，
