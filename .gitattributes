@@ -1,0 +1,5 @@
+# 第三方 vendored 檔案（Leaflet）保持上游的原始位元組，不做任何行尾轉換。
+# leaflet.css 上游發布的就是 CRLF，若交給 core.autocrlf 正規化成 LF，版控裡的
+# 內容就會與上游不一致（實測差 661 bytes），日後升級版本時整個檔案都會是差異，
+# 也無法用 checksum 驗證抓下來的檔案有沒有被動過。
+gps_qt/web/vendor/** -text
