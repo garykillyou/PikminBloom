@@ -41,8 +41,6 @@ python -m pymobiledevice3 remote tunneld
 PikminBloom/
 ├── run.bat              # 啟動捷徑：先確保 tunneld 在跑，再用 pythonw 開 App
 ├── start_tunneld.ps1    # 偵測 49151 埠，必要時以系統管理員啟動 tunneld
-├── docs/
-│   └── pyside6-migration-plan.md  # 由 CustomTkinter 遷移到 PySide6 的歷史計畫文件
 └── gps_qt/
     ├── main.py              # 進入點：QApplication + qasync 事件迴圈
     ├── theme.py             # qt-material 主題套用、字級覆寫、danger/success 語意色

@@ -140,7 +140,6 @@ python -m gps_qt.main
 ```
 PikminBloom/
 ├── gps_qt/             # 主程式（GUI App，PySide6 + qasync + qt-material）
-├── docs/               # 開發文件
 ├── requirements.txt    # 相依套件
 ├── run.bat             # 啟動捷徑（自動起 tunneld + 免主控台視窗啟動）
 ├── start_tunneld.ps1   # 偵測並以系統管理員啟動 tunneld
